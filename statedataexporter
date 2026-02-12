@@ -1,0 +1,807 @@
+##Step 1 - Connect to the API and Set Parameters
+import sys
+import subprocess
+
+print("Installing NERIS API client...")
+try:
+    result = subprocess.run([
+        sys.executable, '-m', 'pip', 'install',
+        'https://github.com/ulfsri/neris-api-client/archive/refs/heads/main.zip',
+        '--quiet'
+    ], capture_output=True, text=True)
+    
+    if result.returncode == 0:
+        print("✓ NERIS API client installed successfully")
+    else:
+        print(f"Installation output: {result.stdout}")
+        print(f"Installation errors: {result.stderr}")
+except Exception as e:
+    print(f"Installation error: {e}")
+
+# Import required libraries
+import os
+from datetime import datetime, timedelta
+import json
+import pandas as pd
+import ipywidgets as widgets
+from IPython.display import display, HTML, clear_output
+
+# Import ArcGIS components
+try:
+    from arcgis.gis import GIS
+    from arcgis.features import FeatureLayer, FeatureSet
+    print("✓ ArcGIS modules loaded")
+except ImportError as e:
+    print(f"Warning: Could not import ArcGIS modules: {e}")
+
+# Import NERIS client components
+try:
+    from neris_api_client import NerisApiClient
+    print("✓ NERIS API Client loaded")
+except ImportError:
+    print("⚠ NERIS API Client not found.")
+    print("IMPORTANT: You may need to restart the kernel (Kernel > Restart)")
+    print("After restarting, you can skip Section 1 and start from Section 2")
+
+print("\n✓ Setup complete!")
+
+# Check if widgets are available
+try:
+    import ipywidgets as widgets
+    from IPython.display import display, HTML, clear_output
+    WIDGETS_AVAILABLE = True
+    print("✓ Interactive widgets loaded")
+except ImportError:
+    WIDGETS_AVAILABLE = False
+    print("⚠ Warning: ipywidgets not available")
+
+if WIDGETS_AVAILABLE:
+    style = {'description_width': '150px'}
+    layout = widgets.Layout(width='500px')
+    
+    display(HTML("<h2>Configuration Form</h2>"))
+    
+    # Credentials
+    display(HTML("<h3 style='color: #1976d2;'>1. Credentials</h3>"))
+    
+    username_widget = widgets.Text(
+        value='',
+        placeholder='your_email@example.com',
+        description='NERIS Email:',
+        style=style,
+        layout=widgets.Layout(width='700px')
+    )
+    display(username_widget)
+    
+    password_widget = widgets.Password(
+        value='',
+        placeholder='Enter your password',
+        description='NERIS Password:',
+        style=style,
+        layout=widgets.Layout(width='700px')
+    )
+    display(password_widget)
+    
+    # Query Parameters
+    display(HTML("<h3 style='color: #1976d2; margin-top: 20px;'>2. Query Parameters</h3>"))
+    
+    state_widget = widgets.Text(
+        value='',
+        placeholder='XX',
+        description='State Code:',
+        style=style,
+        layout=widgets.Layout(width='200px')
+    )
+    display(HTML("""
+        <p style='color: #666; margin: 5px 0 10px 0;'>
+        <i>Enter your two-letter state code</i><br>
+        <strong>Examples:</strong> MI (Michigan), CA (California), NY (New York)
+        </p>
+    """))
+    display(state_widget)
+    
+    neris_entity_widget = widgets.Text(
+        value='',
+        placeholder='FD12345678 (optional)',
+        description='NERIS Entity ID:',
+        style=style,
+        layout=widgets.Layout(width='700px')
+    )
+    display(HTML("""
+        <p style='color: #666; margin: 5px 0 10px 0;'>
+        <i>Optional — filter by a specific department/entity NERIS ID</i><br>
+        <strong>Example:</strong> FD26163151 (leave blank to return all departments in the state)
+        </p>
+    """))
+    display(neris_entity_widget)
+    
+    # Date range selection
+    date_range_type = widgets.RadioButtons(
+        options=['All Records', 'Occurred Today', 'Occurred Yesterday', 'Occurred Last 7 Days', 'Occurred Last 30 Days', 'Occurred in 2025', 'Custom Date Range'],
+        value='All Records',
+        description='Date Range:',
+        style=style
+    )
+    display(HTML("""
+        <p style='background-color: #e3f2fd; padding: 15px; margin: 10px 0; border-left: 4px solid #2196f3; border-radius: 4px;'>
+        <strong>Note:</strong> Filtering is based on when incidents <em>occurred</em> 
+        (call_create_start timestamp from dispatch), not when they were modified in NERIS.
+        </p>
+    """))
+    display(date_range_type)
+    
+    # Custom date inputs (hidden by default)
+    start_date_widget = widgets.DatePicker(
+        description='Start Date:',
+        value=datetime.now().date() - timedelta(days=365),
+        style=style,
+        layout=layout
+    )
+    
+    end_date_widget = widgets.DatePicker(
+        description='End Date:',
+        value=datetime.now().date(),
+        style=style,
+        layout=layout
+    )
+    
+    # Initially hide custom date inputs
+    start_date_widget.layout.display = 'none'
+    end_date_widget.layout.display = 'none'
+    
+    # Show/hide custom dates based on selection
+    def on_date_range_change(change):
+        if change['new'] == 'Custom Date Range':
+            start_date_widget.layout.display = 'flex'
+            end_date_widget.layout.display = 'flex'
+        else:
+            start_date_widget.layout.display = 'none'
+            end_date_widget.layout.display = 'none'
+    
+    date_range_type.observe(on_date_range_change, names='value')
+    
+    display(start_date_widget)
+    display(end_date_widget)
+#Step 2 - Send MFA
+if WIDGETS_AVAILABLE:
+    username = username_widget.value
+    password = password_widget.value
+    
+    if not username or not password:
+        print("\n✗ ERROR: Please fill out your email and password in Section 2 above")
+    else:
+        print(f"\n✓ Username: {username}")
+        print(f"✓ Password: {'*' * len(password)}")
+        
+        os.environ['NERIS_BASE_URL'] = "https://api.neris.fsri.org/v1"
+        os.environ['NERIS_GRANT_TYPE'] = "password"
+        os.environ['NERIS_USERNAME'] = username
+        os.environ['NERIS_PASSWORD'] = password
+        
+        try:
+            print("\nCreating NERIS API Client...")
+            from neris_api_client import NerisApiClient
+            
+            client = NerisApiClient()
+            print("✓ Client object created")
+            
+            print("\n" + "="*70)
+            print("📧 CHECK YOUR EMAIL FOR MFA CODE")
+            print("="*70)
+            
+            test_response = client.list_incidents(page_size=1)
+            
+            print("\n" + "="*70)
+            print("✓✓✓ AUTHENTICATION SUCCESSFUL! ✓✓✓")
+            print("="*70)
+            
+            globals()['neris_client'] = client
+            globals()['authenticated'] = True
+            
+        except Exception as e:
+            print(f"\n✗ AUTHENTICATION FAILED: {e}")
+            globals()['authenticated'] = False
+#Step 3 - Create Dataframe and Export to Excel
+def calculate_date_range(range_type, start_date):
+    """Calculate the minimum call_create_start date.
+    Returns incidents from this date FORWARD.
+    All datetimes are timezone-aware (UTC) to ensure server-side filtering works."""
+    
+    from datetime import timezone
+    
+    now = datetime.now(tz=timezone.utc)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    if range_type == 'All Records':
+        return None
+    elif range_type == 'Occurred Today':
+        return today
+    elif range_type == 'Occurred Yesterday':
+        return today - timedelta(days=1)
+    elif range_type == 'Occurred Last 7 Days':
+        return today - timedelta(days=7)
+    elif range_type == 'Occurred Last 30 Days':
+        return today - timedelta(days=30)
+    elif range_type == 'Occurred Last 90 Days':
+        return today - timedelta(days=90)
+    elif range_type.startswith('Occurred in '):
+        year = int(range_type.split()[-1])
+        return datetime(year, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    elif range_type == 'Custom Date Range':
+        return datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+    
+    return None
+
+def get_state_incidents(client, state_code, call_create_start=None, neris_id_entity=None, max_incidents=None, page_size=100):
+    """Retrieve incidents using the NERIS client library with server-side filtering."""
+    
+    all_incidents = []
+    next_cursor = None
+    incident_count = 0
+    page_count = 0
+    
+    print(f"Retrieving incidents for state: {state_code}")
+    if neris_id_entity:
+        print(f"Filter: neris_id_entity = {neris_id_entity}")
+    if call_create_start:
+        print(f"Filter: call_create_start >= {call_create_start.strftime('%Y-%m-%d')}")
+    else:
+        print("Filter: All records (no date filter)")
+    
+    records_remain = True
+    
+    while records_remain:
+        page_count += 1
+        print(f"  Page {page_count}... ", end='', flush=True)
+        
+        try:
+            # Build kwargs for the client method
+            kwargs = {
+                'state': state_code,
+                'page_size': page_size,
+            }
+            
+            if call_create_start:
+                kwargs['call_create_start'] = call_create_start
+            
+            if neris_id_entity:
+                kwargs['neris_id_entity'] = neris_id_entity
+            
+            if next_cursor:
+                kwargs['cursor'] = next_cursor
+            
+            res = client.list_incidents(**kwargs)
+            
+            # Handle both parsed dict and raw Response objects
+            if not isinstance(res, dict):
+                res = res.json()
+            
+            incidents = res.get('incidents', [])
+            
+            if not incidents:
+                print("empty page")
+                break
+            
+            all_incidents.extend(incidents)
+            incident_count += len(incidents)
+            print(f"retrieved {len(incidents)} incidents (Total: {incident_count})")
+            
+            if max_incidents and incident_count >= max_incidents:
+                all_incidents = all_incidents[:max_incidents]
+                print(f"✓ Reached limit: {max_incidents}")
+                break
+            
+            next_cursor = res.get('next_cursor')
+            
+            if not next_cursor:
+                records_remain = False
+                print("✓ No more pages")
+                
+        except Exception as e:
+            print(f"\n✗ Error on page {page_count}: {e}")
+            import traceback
+            traceback.print_exc()
+            break
+    
+    print(f"\n{'='*50}")
+    print(f"Total incidents retrieved: {len(all_incidents)}")
+    print(f"{'='*50}")
+    return all_incidents
+
+def incidents_to_dataframe(incidents):
+    """Convert incident list to pandas DataFrame."""
+    if not incidents:
+        print("⚠ No incidents to convert")
+        return pd.DataFrame()
+    
+    for incident in incidents:
+        if 'base' in incident and isinstance(incident['base'], dict):
+            if 'neris_uid' in incident['base']:
+                incident['neris_uid'] = incident['base']['neris_uid']
+            if 'incident_number' in incident['base']:
+                incident['incident_number'] = incident['base']['incident_number']
+    
+    df = pd.json_normalize(incidents, sep='_')
+    
+    import warnings
+    for col in df.columns:
+        if any(field in col.lower() for field in ['date', 'time', 'created', 'updated']):
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+            except:
+                pass
+    
+    print(f"✓ Created DataFrame with {len(df)} rows and {len(df.columns)} columns")
+    return df
+
+def export_to_excel(incidents, client, filename=None, state_code=None):
+    """Export incidents to formatted Excel with Overview and Raw Data sheets.
+    
+    - Overview: curated columns with clean extracted values
+    - Raw Data: full json_normalize with array fields flattened to strings
+    - Both sheets: blank columns removed, original dark blue header formatting
+    """
+    if not incidents:
+        print("⚠ No data to export")
+        return None
+
+    if filename is None:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"neris_incidents_{state_code}_{timestamp}.xlsx"
+
+    # Build department name cache
+    dept_ids = set()
+    for inc in incidents:
+        base = inc.get('base', {}) or {}
+        did = base.get('department_neris_id')
+        if did:
+            dept_ids.add(did)
+
+    print(f"Looking up {len(dept_ids)} department names...")
+    dept_names = {}
+    for i, did in enumerate(dept_ids, 1):
+        try:
+            entity = client.get_entity(did)
+            dept_names[did] = entity.get('name', '')
+        except Exception:
+            dept_names[did] = ''
+        if i % 25 == 0:
+            print(f"  {i}/{len(dept_ids)} departments looked up...")
+    print(f"✓ Department lookup complete")
+
+    # Helpers
+    def extract_list_field(lst, key):
+        if not lst or not isinstance(lst, list):
+            return ''
+        vals = [str(item.get(key, '')) for item in lst if isinstance(item, dict) and item.get(key)]
+        return '||'.join(vals)
+
+    def join_list(lst):
+        if not lst or not isinstance(lst, list):
+            return ''
+        return '||'.join(str(x) for x in lst if x)
+
+    # --- Build Overview rows ---
+    overview_rows = []
+    for inc in incidents:
+        base = inc.get('base', {}) or {}
+        dispatch = inc.get('dispatch', {}) or {}
+        status_obj = inc.get('incident_status', {}) or {}
+        dept_id = base.get('department_neris_id', '')
+
+        inc_types = inc.get('incident_types', []) or []
+        primary_types = []
+        other_types = []
+        for it in inc_types:
+            if isinstance(it, dict):
+                t = it.get('type', '')
+                if it.get('primary'):
+                    primary_types.append(t)
+                else:
+                    other_types.append(t)
+
+        overview_rows.append({
+            'Incident NERIS ID': inc.get('neris_id', ''),
+            'Department/Entity ID': dept_id,
+            'Department Name': dept_names.get(dept_id, ''),
+            'Incident Number': base.get('incident_number', ''),
+            'Last Modified': inc.get('last_modified', ''),
+            'Incident Status': status_obj.get('status', ''),
+            'People Present': base.get('people_present', ''),
+            'Animals Rescued': base.get('animals_rescued', ''),
+            'Outcome Narrative': base.get('outcome_narrative', ''),
+            'Displacement Count': base.get('displacement_count', ''),
+            'Submitter Type': inc.get('submitter_account_type', ''),
+            'Primary Incident Type': '||'.join(primary_types),
+            'Other Incident Types': '||'.join(other_types),
+        })
+
+    # --- Build Raw Data ---
+    # Pre-process: flatten all nested arrays/objects to strings before json_normalize
+    import copy
+    processed = []
+    casualty_detail_rows = []
+    for inc in copy.deepcopy(incidents):
+        base = inc.get('base', {}) or {}
+        dispatch = inc.get('dispatch', {}) or {}
+        dept_id = base.get('department_neris_id', '')
+
+        # Add department name
+        inc['department_name'] = dept_names.get(dept_id, '')
+
+        # Promote common fields
+        if isinstance(base, dict):
+            inc['department_neris_id'] = base.get('department_neris_id', '')
+            inc['incident_number'] = base.get('incident_number', '')
+        dept_obj = inc.get('department', {}) or {}
+        inc['department_time_zone'] = dept_obj.get('time_zone', '')
+
+        # Flatten array fields to strings
+        # incident_types
+        inc_types = inc.get('incident_types', []) or []
+        primary = [it.get('type', '') for it in inc_types if isinstance(it, dict) and it.get('primary')]
+        other = [it.get('type', '') for it in inc_types if isinstance(it, dict) and not it.get('primary')]
+        inc['primary_incident_types'] = '||'.join(primary)
+        inc['other_incident_types'] = '||'.join(other)
+        inc.pop('incident_types', None)
+
+        # special_modifiers
+        inc['special_modifiers'] = extract_list_field(inc.get('special_modifiers', []), 'type')
+
+        # aids
+        aids = inc.get('aids', []) or []
+        inc['aid_types'] = extract_list_field(aids, 'aid_type')
+        inc['aid_directions'] = extract_list_field(aids, 'aid_direction')
+        inc['aid_department_ids'] = extract_list_field(aids, 'department_neris_id')
+        inc.pop('aids', None)
+
+        # nonfd_aids
+        inc['nonfd_aid_types'] = extract_list_field(inc.get('nonfd_aids', []), 'type')
+        inc.pop('nonfd_aids', None)
+
+        # unit_responses (top-level)
+        units = inc.get('unit_responses', []) or []
+        inc['unit_ids'] = extract_list_field(units, 'reported_unit_id')
+        inc['unit_neris_ids'] = extract_list_field(units, 'unit_neris_id')
+        inc['total_units'] = len(units)
+        inc['total_staffing'] = sum(u.get('staffing', 0) or 0 for u in units if isinstance(u, dict))
+        inc['unit_response_modes'] = extract_list_field(units, 'response_mode')
+        inc.pop('unit_responses', None)
+
+        # dispatch.unit_responses
+        disp_units = dispatch.get('unit_responses', []) or []
+        dispatch['disp_unit_ids'] = extract_list_field(disp_units, 'reported_unit_id')
+        dispatch['disp_total_units'] = len(disp_units)
+        dispatch['disp_total_staffing'] = sum(u.get('staffing', 0) or 0 for u in disp_units if isinstance(u, dict))
+        dispatch.pop('unit_responses', None)
+
+        # dispatch.comments
+        comments = dispatch.get('comments', []) or []
+        dispatch['comments_text'] = extract_list_field(comments, 'comment')
+        dispatch.pop('comments', None)
+
+        # dispatch.location - flatten cross_streets and location_aliases
+        disp_loc = dispatch.get('location', {}) or {}
+        disp_cross = disp_loc.get('cross_streets', []) or []
+        disp_loc['cross_streets'] = extract_list_field(disp_cross, 'street')
+        disp_aliases = disp_loc.get('location_aliases', []) or []
+        disp_loc['location_aliases'] = join_list(disp_aliases)
+
+        # base.location - flatten cross_streets and location_aliases
+        base_loc = base.get('location', {}) or {}
+        base_cross = base_loc.get('cross_streets', []) or []
+        base_loc['cross_streets'] = extract_list_field(base_cross, 'street')
+        base_aliases = base_loc.get('location_aliases', []) or []
+        base_loc['location_aliases'] = join_list(base_aliases)
+
+        # base.displacement_causes
+        base['displacement_causes'] = join_list(base.get('displacement_causes', []))
+
+        # exposures
+        exposures = inc.get('exposures', []) or []
+        inc['exposure_count'] = len(exposures)
+        inc['exposure_damage_types'] = extract_list_field(exposures, 'damage_type')
+        inc.pop('exposures', None)
+
+        # casualty_rescues - summary for raw data, full detail saved for separate tab
+        casualties = inc.get('casualty_rescues', []) or []
+        inc['casualty_count'] = len(casualties)
+        inc['casualty_types'] = extract_list_field(casualties, 'type')
+        inc['casualty_ranks'] = extract_list_field(casualties, 'rank')
+        inc['casualty_genders'] = extract_list_field(casualties, 'gender')
+        
+        # Build detailed rows for Casualty & Rescue tab
+        neris_id = inc.get('neris_id', '')
+        for cas in casualties:
+            if not isinstance(cas, dict):
+                continue
+            casualty_obj = cas.get('casualty', {}) or {}
+            injury = casualty_obj.get('injury_or_noninjury', {}) or {}
+            ff_details = injury.get('ff_injury_details', {}) or {}
+            rescue_obj = cas.get('rescue', {}) or {}
+            ffrescue = rescue_obj.get('ffrescue_or_nonffrescue', {}) or {}
+            removal = ffrescue.get('removal_or_nonremoval', {}) or {}
+            fire_removal = removal.get('fire_removal', {}) or {}
+            presence_known = rescue_obj.get('presence_known', {}) or {}
+            mayday_obj = rescue_obj.get('mayday', {}) or {}
+
+            casualty_detail_rows.append({
+                'Incident NERIS ID': neris_id,
+                'Department/Entity ID': dept_id,
+                'Department Name': dept_names.get(dept_id, ''),
+                'Call Date': (inc.get('dispatch', {}) or {}).get('call_create', ''),
+                'County': (base.get('location', {}) or {}).get('county', ''),
+                # Person info
+                'Type': cas.get('type', ''),
+                'Rank': cas.get('rank', ''),
+                'Years of Service': cas.get('years_of_service', ''),
+                'Birth Month Year': cas.get('birth_month_year', ''),
+                'Gender': cas.get('gender', ''),
+                'Race': cas.get('race', ''),
+                # Casualty / Injury
+                'Injury Type': injury.get('type', ''),
+                'Injury Cause': injury.get('cause', ''),
+                # FF Injury Details
+                'FF Unit NERIS ID': ff_details.get('unit_neris_id', ''),
+                'FF Reported Unit ID': ff_details.get('reported_unit_id', ''),
+                'FF Unit Continuity': ff_details.get('unit_continuity', ''),
+                'FF Incident Command': ff_details.get('incident_command', ''),
+                'FF Job Classification': ff_details.get('job_classification', ''),
+                'FF Duty Type': ff_details.get('duty_type', ''),
+                'FF Action Type': ff_details.get('action_type', ''),
+                'FF Incident Stage': ff_details.get('incident_stage', ''),
+                'FF PPE Items': join_list(ff_details.get('ppe_items', [])),
+                # Rescue
+                'Rescue Type': ffrescue.get('type', ''),
+                'Rescue Actions': join_list(ffrescue.get('actions', [])),
+                'Rescue Impediments': join_list(ffrescue.get('impediments', [])),
+                # Removal
+                'Removal Type': removal.get('type', ''),
+                'Removal Room Type': removal.get('room_type', ''),
+                'Removal Elevation Type': removal.get('elevation_type', ''),
+                'Rescue Path Type': removal.get('rescue_path_type', ''),
+                'Gas Isolation': removal.get('gas_isolation', ''),
+                'Fire Removal Relative Suppression Time': fire_removal.get('relative_suppression_time', ''),
+                # Presence Known
+                'Presence Known Type': presence_known.get('presence_known_type', ''),
+                # Mayday
+                'Mayday': mayday_obj.get('mayday', ''),
+                'RIT Activated': mayday_obj.get('rit_activated', ''),
+                'Mayday Relative Suppression Time': mayday_obj.get('relative_suppression_time', ''),
+            })
+        
+        inc.pop('casualty_rescues', None)
+
+        # medical_details
+        med = inc.get('medical_details', []) or []
+        inc['med_report_ids'] = extract_list_field(med, 'patient_care_report_id')
+        inc['med_evaluations'] = extract_list_field(med, 'patient_care_evaluation')
+        inc['med_patient_statuses'] = extract_list_field(med, 'patient_status')
+        inc['med_transport_dispositions'] = extract_list_field(med, 'transport_disposition')
+        inc.pop('medical_details', None)
+
+        # electric_hazards
+        elec = inc.get('electric_hazards', []) or []
+        inc['electric_hazard_types'] = extract_list_field(elec, 'type')
+        inc['electric_hazard_source_target'] = extract_list_field(elec, 'source_or_target')
+        inc.pop('electric_hazards', None)
+
+        # powergen_hazards
+        pgen = inc.get('powergen_hazards', []) or []
+        inc['powergen_hazard_count'] = len(pgen)
+        inc.pop('powergen_hazards', None)
+
+        # fire_detail - flatten list fields
+        fire = inc.get('fire_detail', {}) or {}
+        fire['investigation_types'] = join_list(fire.get('investigation_types', []))
+        fire['suppression_appliances'] = join_list(fire.get('suppression_appliances', []))
+
+        # hazsit_detail.chemicals
+        hazsit = inc.get('hazsit_detail', {}) or {}
+        chems = hazsit.get('chemicals', []) or []
+        hazsit['chemical_names'] = extract_list_field(chems, 'name')
+        hazsit['chemical_dot_classes'] = extract_list_field(chems, 'dot_class')
+        hazsit.pop('chemicals', None)
+
+        # smoke_alarm - flatten alarm_types
+        sa_presence = (inc.get('smoke_alarm', {}) or {}).get('presence', {}) or {}
+        sa_presence['alarm_types'] = join_list(sa_presence.get('alarm_types', []))
+
+        # fire_alarm - flatten alarm_types
+        fa_presence = (inc.get('fire_alarm', {}) or {}).get('presence', {}) or {}
+        fa_presence['alarm_types'] = join_list(fa_presence.get('alarm_types', []))
+
+        # other_alarm - flatten alarm_types
+        oa_presence = (inc.get('other_alarm', {}) or {}).get('presence', {}) or {}
+        oa_presence['alarm_types'] = join_list(oa_presence.get('alarm_types', []))
+
+        # fire_suppression - flatten suppression_types
+        fs_presence = (inc.get('fire_suppression', {}) or {}).get('presence', {}) or {}
+        supp_types = fs_presence.get('suppression_types', []) or []
+        fs_presence['suppression_types'] = extract_list_field(supp_types, 'type') if supp_types and isinstance(supp_types[0], dict) else join_list(supp_types)
+
+        # cooking_fire_suppression - flatten suppression_types
+        cfs_presence = (inc.get('cooking_fire_suppression', {}) or {}).get('presence', {}) or {}
+        cfs_types = cfs_presence.get('suppression_types', []) or []
+        cfs_presence['suppression_types'] = join_list(cfs_types)
+
+        # actions_tactics - flatten actions list
+        at = inc.get('actions_tactics', {}) or {}
+        an = at.get('action_noaction', {}) or {}
+        an['actions'] = join_list(an.get('actions', []))
+
+        processed.append(inc)
+
+    df_raw = pd.json_normalize(processed, sep='_')
+
+    # Remove unwanted metadata columns (neris_uid and last_modified from sub-modules)
+    exclude_cols = {
+        'actions_tactics_last_modified', 'actions_tactics_neris_uid',
+        'base_location_geocoded_location_neris_uid', 'base_location_neris_uid',
+        'base_location_use_in_use_last_modified', 'base_location_use_in_use_neris_uid',
+        'base_location_use_neris_uid',
+        'census_tract_incident_neris_id', 'census_tract_last_modified', 'census_tract_neris_uid',
+        'cooking_fire_suppression_last_modified', 'cooking_fire_suppression_neris_uid',
+        'cooking_fire_suppression_presence_last_modified', 'cooking_fire_suppression_presence_neris_uid',
+        'csst_hazard_last_modified', 'csst_hazard_neris_uid',
+        'dispatch_last_modified', 'dispatch_location_geocoded_location_neris_uid', 'dispatch_neris_uid',
+        'dispatch_tactic_timestamps_last_modified', 'dispatch_tactic_timestamps_neris_uid',
+        'fire_alarm_last_modified', 'fire_alarm_neris_uid',
+        'fire_alarm_presence_last_modified', 'fire_alarm_presence_neris_uid',
+        'fire_detail_last_modified', 'fire_detail_neris_uid',
+        'fire_suppression_last_modified', 'fire_suppression_neris_uid',
+        'fire_suppression_presence_last_modified', 'fire_suppression_presence_neris_uid',
+        'fire_suppression_presence_operation_type_effectiveness_last_modified',
+        'fire_suppression_presence_operation_type_effectiveness_neris_uid',
+        'fire_suppression_presence_operation_type_last_modified',
+        'fire_suppression_presence_operation_type_neris_uid',
+        'hazsit_detail_last_modified', 'hazsit_detail_neris_uid',
+        'incident_status_last_modified',
+        'other_alarm_last_modified', 'other_alarm_neris_uid',
+        'other_alarm_presence_last_modified', 'other_alarm_presence_neris_uid',
+        'smoke_alarm_last_modified', 'smoke_alarm_neris_uid',
+        'smoke_alarm_presence_operation_alerted_failed_other_last_modified',
+        'smoke_alarm_presence_operation_alerted_failed_other_neris_uid',
+        'smoke_alarm_presence_operation_last_modified', 'smoke_alarm_presence_operation_neris_uid',
+        'tactic_timestamps_last_modified', 'tactic_timestamps_neris_uid',
+        'weather_last_modified', 'weather_neris_uid',
+    }
+    df_raw = df_raw.drop(columns=[c for c in exclude_cols if c in df_raw.columns])
+
+    # Remove blank columns from both
+    def clean_df(df):
+        cols_to_drop = []
+        for col in df.columns:
+            vals = df[col].dropna()
+            if vals.empty:
+                cols_to_drop.append(col)
+                continue
+            if vals.apply(lambda x: x == '' or x == [] or (isinstance(x, str) and x == '[]')).all():
+                cols_to_drop.append(col)
+        return df.drop(columns=cols_to_drop)
+
+    df_overview = clean_df(pd.DataFrame(overview_rows).fillna(''))
+    df_raw = clean_df(df_raw)
+    df_casualties = clean_df(pd.DataFrame(casualty_detail_rows).fillna('')) if casualty_detail_rows else pd.DataFrame()
+
+    print(f"  Overview: {len(df_overview.columns)} columns")
+    print(f"  Raw Data: {len(df_raw.columns)} columns")
+    print(f"  Casualty & Rescue: {len(df_casualties)} rows, {len(df_casualties.columns)} columns")
+
+    # Write with formatting
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    def write_formatted_sheet(wb, df, sheet_name):
+        import re
+        # Strip illegal XML control characters that openpyxl can't handle
+        ILLEGAL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+        def sanitize(val):
+            if isinstance(val, str):
+                return ILLEGAL_CHARS_RE.sub('', val)
+            return val
+
+        sheet = wb.create_sheet(sheet_name)
+        headers = list(df.columns)
+        sheet.append(headers)
+        for _, row_data in df.iterrows():
+            sheet.append([sanitize(row_data[h]) for h in headers])
+
+        header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
+        header_font = Font(color='FFFFFF', bold=True, size=11)
+        header_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+        for cell in sheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_align
+
+        for col_idx, header in enumerate(headers, 1):
+            col_letter = get_column_letter(col_idx)
+            max_len = len(str(header))
+            for row in range(2, min(sheet.max_row + 1, 52)):
+                val = sheet.cell(row, col_idx).value
+                if val:
+                    max_len = max(max_len, len(str(val)))
+            sheet.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 60)
+
+        sheet.freeze_panes = 'A2'
+
+    wb = Workbook()
+    wb.remove(wb.active)  # Remove default sheet
+    write_formatted_sheet(wb, df_overview, 'Overview')
+    write_formatted_sheet(wb, df_raw, 'Raw Data')
+    if not df_casualties.empty:
+        write_formatted_sheet(wb, df_casualties, 'Casualty & Rescue')
+    wb.save(filename)
+
+    print(f"\n✓ Excel exported: {filename}")
+    print(f"  Incidents: {len(incidents)}")
+    sheets = "Overview, Raw Data" + (", Casualty & Rescue" if not df_casualties.empty else "")
+    print(f"  Sheets: {sheets}")
+    return filename
+
+print("✓ Helper functions loaded")
+
+if 'neris_client' not in globals() or not globals().get('authenticated'):
+    print("\n✗ ERROR: Not authenticated!")
+else:
+    client = globals()['neris_client']
+    
+    if WIDGETS_AVAILABLE:
+        state_code = state_widget.value
+        range_type = date_range_type.value
+        entity_id = neris_entity_widget.value.strip() or None
+        
+        if not state_code:
+            print("✗ ERROR: Please enter a state code")
+        else:
+            print(f"\nState: {state_code}")
+            if entity_id:
+                print(f"Entity ID: {entity_id}")
+            print(f"Date Range: {range_type}")
+            
+            start_date_filter = calculate_date_range(range_type, start_date_widget.value)
+            
+            if start_date_filter:
+                print(f"Filter: >= {start_date_filter.strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            print("\n" + "="*70)
+            
+            try:
+                incidents = get_state_incidents(
+                    client,
+                    state_code,
+                    call_create_start=start_date_filter,
+                    neris_id_entity=entity_id,
+                    max_incidents=None,
+                    page_size=100
+                )
+                
+                if not incidents:
+                    print("\n⚠ No incidents found")
+                else:
+                    print("\nConverting to DataFrame...")
+                    df = incidents_to_dataframe(incidents)
+                    globals()['df_incidents'] = df
+                    
+                    print(f"\nTotal Incidents: {len(df)}")
+                    print(df.head(3))
+                    
+                    print("\nExporting to Excel...")
+                    excel_file = export_to_excel(incidents, client, state_code=state_code)
+                    
+                    if excel_file:
+                        print(f"\n✓ Complete! DataFrame: 'df_incidents', File: {excel_file}")
+                
+            except Exception as e:
+                print(f"\n✗ Error: {e}")
+                import traceback
+                traceback.print_exc()
+
+print("\n" + "="*70)
+print("✓ PROCESS COMPLETE")
+print("="*70)
