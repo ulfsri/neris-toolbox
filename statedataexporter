@@ -162,6 +162,7 @@ if WIDGETS_AVAILABLE:
     
     display(start_date_widget)
     display(end_date_widget)
+
 #Step 2 - Send MFA
 if WIDGETS_AVAILABLE:
     username = username_widget.value
@@ -201,10 +202,12 @@ if WIDGETS_AVAILABLE:
         except Exception as e:
             print(f"\n✗ AUTHENTICATION FAILED: {e}")
             globals()['authenticated'] = False
+
 #Step 3 - Create Dataframe and Export to Excel
-def calculate_date_range(range_type, start_date):
-    """Calculate the minimum call_create_start date.
-    Returns incidents from this date FORWARD.
+def calculate_date_range(range_type, start_date, end_date):
+    """Calculate the date range for filtering.
+    Returns (min_date, max_date) tuple.
+    For year filters, returns literal start and end of that year.
     All datetimes are timezone-aware (UTC) to ensure server-side filtering works."""
     
     from datetime import timezone
@@ -213,27 +216,39 @@ def calculate_date_range(range_type, start_date):
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     
     if range_type == 'All Records':
-        return None
+        return (None, None)
     elif range_type == 'Occurred Today':
-        return today
+        return (today, today.replace(hour=23, minute=59, second=59))
     elif range_type == 'Occurred Yesterday':
-        return today - timedelta(days=1)
+        yesterday = today - timedelta(days=1)
+        return (yesterday, yesterday.replace(hour=23, minute=59, second=59))
     elif range_type == 'Occurred Last 7 Days':
-        return today - timedelta(days=7)
+        return (today - timedelta(days=7), now)
     elif range_type == 'Occurred Last 30 Days':
-        return today - timedelta(days=30)
+        return (today - timedelta(days=30), now)
     elif range_type == 'Occurred Last 90 Days':
-        return today - timedelta(days=90)
+        return (today - timedelta(days=90), now)
     elif range_type.startswith('Occurred in '):
         year = int(range_type.split()[-1])
-        return datetime(year, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        start = datetime(year, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        end = datetime(year, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+        return (start, end)
     elif range_type == 'Custom Date Range':
-        return datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+        start = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+        end = datetime.combine(end_date, datetime.max.time(), tzinfo=timezone.utc)
+        return (start, end)
     
-    return None
+    return (None, None)
 
-def get_state_incidents(client, state_code, call_create_start=None, neris_id_entity=None, max_incidents=None, page_size=100):
-    """Retrieve incidents using the NERIS client library with server-side filtering."""
+def get_state_incidents(client, state_code, call_create_start_min=None, call_create_start_max=None, neris_id_entity=None, max_incidents=None, page_size=100):
+    """Retrieve incidents using the NERIS client library with server-side and local filtering.
+    
+    Filters based on when the 911 call was created (call_create_start timestamp).
+    - call_create_start_min: minimum date for call_create_start (server-side filter via API)
+    - call_create_start_max: maximum date for call_create_start (local filter after retrieval)
+    
+    Example: For "Occurred in 2025", we want call_create_start between 1/1/2025 and 12/31/2025.
+    """
     
     all_incidents = []
     next_cursor = None
@@ -243,8 +258,10 @@ def get_state_incidents(client, state_code, call_create_start=None, neris_id_ent
     print(f"Retrieving incidents for state: {state_code}")
     if neris_id_entity:
         print(f"Filter: neris_id_entity = {neris_id_entity}")
-    if call_create_start:
-        print(f"Filter: call_create_start >= {call_create_start.strftime('%Y-%m-%d')}")
+    if call_create_start_min and call_create_start_max:
+        print(f"Filter: call_create_start between {call_create_start_min.strftime('%Y-%m-%d')} and {call_create_start_max.strftime('%Y-%m-%d')}")
+    elif call_create_start_min:
+        print(f"Filter: call_create_start >= {call_create_start_min.strftime('%Y-%m-%d')}")
     else:
         print("Filter: All records (no date filter)")
     
@@ -261,8 +278,9 @@ def get_state_incidents(client, state_code, call_create_start=None, neris_id_ent
                 'page_size': page_size,
             }
             
-            if call_create_start:
-                kwargs['call_create_start'] = call_create_start
+            # Server-side filter: get all records >= call_create_start_min
+            if call_create_start_min:
+                kwargs['call_create_start'] = call_create_start_min
             
             if neris_id_entity:
                 kwargs['neris_id_entity'] = neris_id_entity
@@ -280,6 +298,29 @@ def get_state_incidents(client, state_code, call_create_start=None, neris_id_ent
             
             if not incidents:
                 print("empty page")
+                break
+            
+            # Local filter: if we have a max date, only keep incidents where call_create_start <= max
+            if call_create_start_max:
+                filtered_incidents = []
+                for inc in incidents:
+                    dispatch = inc.get('dispatch', {}) or {}
+                    call_create = dispatch.get('call_create_start')
+                    if call_create:
+                        try:
+                            call_dt = pd.to_datetime(call_create)
+                            if call_dt <= call_create_start_max:
+                                filtered_incidents.append(inc)
+                        except:
+                            # If we can't parse the date, include it
+                            filtered_incidents.append(inc)
+                    else:
+                        # If no date, include it
+                        filtered_incidents.append(inc)
+                incidents = filtered_incidents
+            
+            if not incidents:
+                print("all filtered out")
                 break
             
             all_incidents.extend(incidents)
@@ -764,10 +805,16 @@ else:
                 print(f"Entity ID: {entity_id}")
             print(f"Date Range: {range_type}")
             
-            start_date_filter = calculate_date_range(range_type, start_date_widget.value)
+            start_date_filter, end_date_filter = calculate_date_range(
+                range_type, 
+                start_date_widget.value,
+                end_date_widget.value
+            )
             
             if start_date_filter:
-                print(f"Filter: >= {start_date_filter.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"Start Filter: >= {start_date_filter.strftime('%Y-%m-%d %H:%M:%S')}")
+            if end_date_filter:
+                print(f"End Filter: <= {end_date_filter.strftime('%Y-%m-%d %H:%M:%S')}")
             
             print("\n" + "="*70)
             
@@ -775,7 +822,8 @@ else:
                 incidents = get_state_incidents(
                     client,
                     state_code,
-                    call_create_start=start_date_filter,
+                    call_create_start_min=start_date_filter,
+                    call_create_start_max=end_date_filter,
                     neris_id_entity=entity_id,
                     max_incidents=None,
                     page_size=100
