@@ -1,3 +1,94 @@
+
+Claude finished the response
+You said: Can you make sure this is formatted correctly to be used in an IDE and not a notebook?
+
+### Grant Report ### import sys import subprocess import os # ── Install NERIS API client if needed ─────────────────────────────────────── print("Installing NERIS API client...") try: result = subprocess.run( [sys.executable, "-m", "pip", "install", "https://github.com/ulfsri
+
+pasted
+
+Can you make sure this is formatted correctly to be used in an IDE and not a notebook?
+
+10:23 AM
+Claude responded: Looking at the script, it's already well-structured for IDE use.
+Looking at the script, it's already well-structured for IDE use. It has proper if __name__ == "__main__": guard, uses input()/getpass for prompts, and has no notebook-specific syntax. However, there are a few small things I can clean up:
+
+Inline import traceback inside the except block — should be at the top
+print(...).font = ... calls on Table section headers — these won't work because print() returns None. Those lines need to use a proper cell reference instead.
+Let me fix those:
+
+
+Created a file, read a file
+Created a file, read a file
+Two bugs were fixed:
+
+import traceback moved to the top — it was buried inside an except block, which works but is bad practice and will confuse most linters/IDEs.
+Section header font chaining fixed — the original code had patterns like ws.cell(...).font = Font(...) chained directly onto a print() call result (which returns None), so the font styling was silently being dropped. Those are now routed through a small _section_header() helper that mirrors the other cell helpers in the file.
+Everything else was already clean for IDE use — proper top-level imports, if __name__ == "__main__": guard, standard input()/getpass prompts, and no notebook magic commands.
+
+
+Grant report
+PY 
+You said: ModuleNotFoundError: No module named 'dateutil'
+ModuleNotFoundError: No module named 'dateutil'
+
+10:45 AM
+Claude responded: Quick fix — add python-dateutil to the pip install block at the top: I also bundled openpyxl into the same install call while I was there, so all three depende…
+Quick fix — add python-dateutil to the pip install block at the top:
+
+
+Edited a file, read a file
+Edited a file, read a file
+I also bundled openpyxl into the same install call while I was there, so all three dependencies are handled in one shot at startup. That should clear the error.
+
+
+Grant report
+PY 
+You said: ERROR: Could not find a version that satisfies the requirement dateutil (from versions: none)
+ERROR: Could not find a version that satisfies the requirement dateutil (from versions: none)
+ERROR: No matching distribution found for dateutil
+
+10:46 AM
+Claude responded: The package name on PyPI is python-dateutil, not dateutil.
+The package name on PyPI is python-dateutil, not dateutil. The install block already has it correct as python-dateutil — so the error suggests the old version of the file is being run. Double-check you're running the updated file.
+
+That said, if you'd prefer to remove the runtime pip install entirely and just manage dependencies yourself (cleaner for IDE use), you can install once in your terminal:
+
+bash
+pip install python-dateutil openpyxl
+And separately install the NERIS client:
+
+bash
+pip install https://github.com/ulfsri/neris-api-client/archive/refs/heads/main.zip
+Then remove the entire install block from the top of the script — it's more of a notebook pattern anyway. Want me to strip it out of the file?
+
+You said: No i just want it added to the code as an auto install
+No i just want it added to the code as an auto install
+
+10:47 AM
+Claude responded: The install block already has python-dateutil correctly.
+The install block already has python-dateutil correctly. The issue is the imports happen before the install runs. Let me restructure so the install completes before any imports:
+
+
+Check current file structure
+Check current file structure
+There's the problem — from dateutil import ... and from openpyxl import ... are on lines 8–11, before the install block. Let me fix the ordering:
+
+
+Edited 2 files, read a file
+Edited 2 files, read a file
+The root cause was that from dateutil import ... and from openpyxl import ... were at the very top of the file, so Python tried to import them before the install block ever ran. Now the stdlib-only imports come first, the pip install runs, and only then do the third-party imports happen.
+
+
+Grant report
+PY 
+
+
+
+
+Claude is AI and can make mistakes. Please double-check responses.
+Grant report · PY
+Copy
+
 ### Grant Report ###
 import sys
 import subprocess
@@ -5,36 +96,39 @@ import os
 import traceback
 import getpass
 from datetime import datetime
-from dateutil import parser as dateparser
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
-
-# ── Install NERIS API client if needed ───────────────────────────────────────
-print("Installing NERIS API client...")
+ 
+# ── Install dependencies before importing third-party modules ─────────────────
+print("Installing dependencies...")
 try:
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install",
+         "python-dateutil",
+         "openpyxl",
          "https://github.com/ulfsri/neris-api-client/archive/refs/heads/main.zip",
          "--quiet"],
         capture_output=True, text=True
     )
     if result.returncode == 0:
-        print("✓ NERIS API client installed successfully")
+        print("✓ Dependencies installed successfully")
     else:
         print(f"Installation output: {result.stdout}")
         print(f"Installation errors: {result.stderr}")
 except Exception as e:
     print(f"Installation error: {e}")
-
+ 
+from dateutil import parser as dateparser
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+ 
 try:
     from neris_api_client import NerisApiClient
     print("✓ NERIS API Client loaded")
 except ImportError:
     print("✗ NERIS API Client not found. Exiting.")
     sys.exit(1)
-
-
+ 
+ 
 # ── Incident-type → category mapping ─────────────────────────────────────────
 INCIDENT_TYPE_MAP = {
     # FIRE — Outside Fire
@@ -178,7 +272,7 @@ INCIDENT_TYPE_MAP = {
     "RESCUE||WATER||PERSON_IN_WATER_STANDING":                  ("RESCUE", None),
     "RESCUE||WATER||PERSON_IN_WATER_SWIFTWATER":                ("RESCUE", None),
 }
-
+ 
 TABLE0_ROWS = [
     "Total Incidents",
     "Incidents with Multiple Types",
@@ -188,10 +282,10 @@ TABLE0_ROWS = [
 TABLE1_ROWS = ["FIRE", "EMS", "RESCUE", "HAZARDOUS SITUATION", "PUBLIC SERVICE", "GOOD INTENT", "FALSE ALARM"]
 TABLE2_ROWS = ["STRUCTURE FIRE", "TRANSPORTATION FIRE", "VEGETATION FIRE",
                "TRASH / RUBBISH FIRE", "OUTDOOR FIRE", "SPECIAL FIRE"]
-
-
+ 
+ 
 # ── Data helpers ──────────────────────────────────────────────────────────────
-
+ 
 def get_call_year(incident):
     """Extract the year from dispatch.call_create. Returns None if unavailable."""
     try:
@@ -201,8 +295,8 @@ def get_call_year(incident):
     except Exception:
         pass
     return None
-
-
+ 
+ 
 def get_incident_types(incident):
     """
     Returns a list of dicts: [{type, position}, ...]
@@ -212,7 +306,7 @@ def get_incident_types(incident):
     result = []
     primary_seen = False
     non_primary = []
-
+ 
     for it in inc_types:
         if not isinstance(it, dict):
             continue
@@ -224,19 +318,19 @@ def get_incident_types(incident):
             primary_seen = True
         else:
             non_primary.append(t)
-
+ 
     for i, t in enumerate(non_primary, start=2):
         result.append({"type": t, "position": min(i, 3)})
-
+ 
     return result
-
-
+ 
+ 
 def fetch_all_incidents(client, entity_id, page_size=100):
     """Page through all incidents for the given entity."""
     all_incidents = []
     next_cursor = None
     page = 0
-
+ 
     print(f"\nFetching incidents for entity: {entity_id}")
     while True:
         page += 1
@@ -262,11 +356,11 @@ def fetch_all_incidents(client, entity_id, page_size=100):
             print(f"\n✗ Error on page {page}: {e}")
             traceback.print_exc()
             break
-
+ 
     print(f"\n✓ Total incidents fetched: {len(all_incidents)}")
     return all_incidents
-
-
+ 
+ 
 def build_counts(incidents):
     """
     Returns:
@@ -283,22 +377,22 @@ def build_counts(incidents):
     t1_counts = {cat: {} for cat in TABLE1_ROWS}
     t2_counts = {sub: {} for sub in TABLE2_ROWS}
     t3_counts = {cat: {} for cat in TABLE1_ROWS}
-
+ 
     for inc in incidents:
         year = get_call_year(inc)
         if year is None:
             continue
         years.add(year)
-
+ 
         # ── Table 0 ───────────────────────────────────────────────────────────
-
+ 
         t0_counts["Total Incidents"][year] = \
             t0_counts["Total Incidents"].get(year, 0) + 1
-
+ 
         if len(inc.get("incident_types") or []) > 1:
             t0_counts["Incidents with Multiple Types"][year] = \
                 t0_counts["Incidents with Multiple Types"].get(year, 0) + 1
-
+ 
         aids = inc.get("aids") or []
         directions = {
             (a.get("aid_direction") or "").upper()
@@ -311,33 +405,33 @@ def build_counts(incidents):
         if "RECEIVED" in directions:
             t0_counts["Aid Received"][year] = \
                 t0_counts["Aid Received"].get(year, 0) + 1
-
+ 
         # ── Tables 1 / 2 / 3 ─────────────────────────────────────────────────
         types = get_incident_types(inc)
-
+ 
         # Total type codes on this incident, capped at 3 for the "Three" bucket
         total_type_count = min(len(types), 3)
-
+ 
         # Collect the distinct disciplines present on this incident
         seen_t1 = set()
         seen_t2 = set()
-
+ 
         for t in types:
             mapping = INCIDENT_TYPE_MAP.get(t["type"])
             if not mapping:
                 continue
             cat, subcat = mapping
-
+ 
             # Table 1: one count per discipline per incident
             if cat not in seen_t1:
                 seen_t1.add(cat)
                 t1_counts[cat][year] = t1_counts[cat].get(year, 0) + 1
-
+ 
             # Table 2: one count per fire subcategory per incident
             if subcat and subcat not in seen_t2:
                 seen_t2.add(subcat)
                 t2_counts[subcat][year] = t2_counts[subcat].get(year, 0) + 1
-
+ 
         # Table 3: for each distinct discipline on this incident, increment
         # the bucket matching the total number of type codes on the incident.
         # This answers: "how many FIRE incidents had exactly 1 type? 2 types? 3+?"
@@ -346,20 +440,20 @@ def build_counts(incidents):
                 t3_counts[cat][year] = {1: 0, 2: 0, 3: 0}
             t3_counts[cat][year][total_type_count] = \
                 t3_counts[cat][year].get(total_type_count, 0) + 1
-
+ 
     return sorted(years), t0_counts, t1_counts, t2_counts, t3_counts
-
-
+ 
+ 
 # ── Excel helpers ─────────────────────────────────────────────────────────────
-
+ 
 HEADER_FILL = PatternFill(start_color="262F68", end_color="262F68", fill_type="solid")
 HEADER_FONT = Font(color="FFFFFF", bold=True, size=11)
 TOTAL_FILL  = PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid")
 DEPT_FILL   = PatternFill(start_color="9A1E22", end_color="9A1E22", fill_type="solid")
 THIN        = Side(style="thin")
 THIN_BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-
-
+ 
+ 
 def _hcell(ws, row, col, value):
     c = ws.cell(row=row, column=col, value=value)
     c.fill = HEADER_FILL
@@ -367,24 +461,24 @@ def _hcell(ws, row, col, value):
     c.alignment = Alignment(horizontal="center", vertical="center")
     c.border = THIN_BORDER
     return c
-
-
+ 
+ 
 def _dcell(ws, row, col, value, bold=False):
     c = ws.cell(row=row, column=col, value=value)
     c.font = Font(bold=bold, size=11)
     c.alignment = Alignment(horizontal="left", vertical="center")
     c.border = THIN_BORDER
     return c
-
-
+ 
+ 
 def _numcell(ws, row, col, value):
     c = ws.cell(row=row, column=col, value=value)
     c.font = Font(size=11)
     c.alignment = Alignment(horizontal="center", vertical="center")
     c.border = THIN_BORDER
     return c
-
-
+ 
+ 
 def _totalcell(ws, row, col, value):
     """Light blue shaded, bold cell for totals rows."""
     c = ws.cell(row=row, column=col, value=value)
@@ -393,26 +487,26 @@ def _totalcell(ws, row, col, value):
     c.alignment = Alignment(horizontal="center", vertical="center")
     c.border = THIN_BORDER
     return c
-
-
+ 
+ 
 def _section_header(ws, row, col, text):
     """Write a bold section title cell and return it."""
     c = ws.cell(row=row, column=col, value=text)
     c.font = Font(bold=True, size=13)
     return c
-
-
+ 
+ 
 def write_report(years, t0_counts, t1_counts, t2_counts, t3_counts,
                  entity_id, dept_name, filename):
     wb = Workbook()
     ws = wb.active
     ws.title = "Incident Type Report"
-
+ 
     # Widest table is Table 3: 3 sub-columns per year
     total_cols = 1 + len(years) * 3
-
+ 
     row = 1
-
+ 
     # ── Row 1: Department banner ──────────────────────────────────────────────
     ws.merge_cells(start_row=row, start_column=1,
                    end_row=row,   end_column=total_cols)
@@ -423,64 +517,64 @@ def write_report(years, t0_counts, t1_counts, t2_counts, t3_counts,
     banner.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[row].height = 24
     row += 1
-
+ 
     row += 1  # blank spacer
-
+ 
     # ── Table 0: All Incidents ────────────────────────────────────────────────
     _section_header(ws, row, 1, "All Incidents")
     row += 1
-
+ 
     _hcell(ws, row, 1, "Metric")
     for i, yr in enumerate(years, start=2):
         _hcell(ws, row, i, yr)
     row += 1
-
+ 
     for metric in TABLE0_ROWS:
         _dcell(ws, row, 1, metric)
         for i, yr in enumerate(years, start=2):
             _numcell(ws, row, i, t0_counts[metric].get(yr, 0))
         row += 1
-
+ 
     row += 2  # spacer
-
+ 
     # ── Table 1: Incident Count by Discipline ─────────────────────────────────
     _section_header(ws, row, 1, "Incident Count by Discipline")
     row += 1
-
+ 
     _hcell(ws, row, 1, "Discipline")
     for i, yr in enumerate(years, start=2):
         _hcell(ws, row, i, yr)
     row += 1
-
+ 
     for cat in TABLE1_ROWS:
         _dcell(ws, row, 1, cat)
         for i, yr in enumerate(years, start=2):
             _numcell(ws, row, i, t1_counts[cat].get(yr, 0))
         row += 1
-
+ 
     row += 2  # spacer
-
+ 
     # ── Table 2: Fire Sub-Category ────────────────────────────────────────────
     _section_header(ws, row, 1, "Fire Sub-Category")
     row += 1
-
+ 
     _hcell(ws, row, 1, "Fire Subcategory")
     for i, yr in enumerate(years, start=2):
         _hcell(ws, row, i, yr)
     row += 1
-
+ 
     for sub in TABLE2_ROWS:
         _dcell(ws, row, 1, sub)
         for i, yr in enumerate(years, start=2):
             _numcell(ws, row, i, t2_counts[sub].get(yr, 0))
         row += 1
-
+ 
     row += 2  # spacer
-
+ 
     # ── Table 3: Count of Incidents by Number of Incident Disciplines ─────────
     _section_header(ws, row, 1, "Count of Incidents by Number of Incident Disciplines")
     row += 1
-
+ 
     # Year super-header merged across 3 sub-columns each
     _hcell(ws, row, 1, "")
     col_start = 2
@@ -497,7 +591,7 @@ def write_report(years, t0_counts, t1_counts, t2_counts, t3_counts,
             ws.cell(row=row, column=mc).border = THIN_BORDER
         col_start += 3
     row += 1
-
+ 
     # Sub-header: One / Two / Three
     _hcell(ws, row, 1, "")
     col = 2
@@ -507,7 +601,7 @@ def write_report(years, t0_counts, t1_counts, t2_counts, t3_counts,
         _hcell(ws, row, col + 2, "Three")
         col += 3
     row += 1
-
+ 
     for cat in TABLE1_ROWS:
         _dcell(ws, row, 1, cat)
         col = 2
@@ -518,37 +612,37 @@ def write_report(years, t0_counts, t1_counts, t2_counts, t3_counts,
             _numcell(ws, row, col + 2, yr_data.get(3, 0))
             col += 3
         row += 1
-
+ 
     # ── Column widths ─────────────────────────────────────────────────────────
     ws.column_dimensions["A"].width = 30
     for col_idx in range(2, total_cols + 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = 16
-
+ 
     wb.save(filename)
     print(f"\n✓ Report saved: {filename}")
-
-
+ 
+ 
 # ── Main ──────────────────────────────────────────────────────────────────────
-
+ 
 def main():
     print("=" * 70)
     print("NERIS Incident Type Count by Year")
     print("=" * 70)
-
+ 
     print()
     username  = input("NERIS Email: ").strip()
     password  = getpass.getpass("NERIS Password: ")
     entity_id = input("NERIS Entity ID (e.g. FD26163151): ").strip()
-
+ 
     if not username or not password or not entity_id:
         print("✗ ERROR: Email, password, and Entity ID are all required.")
         sys.exit(1)
-
+ 
     os.environ["NERIS_BASE_URL"]   = "https://api.neris.fsri.org/v1"
     os.environ["NERIS_GRANT_TYPE"] = "password"
     os.environ["NERIS_USERNAME"]   = username
     os.environ["NERIS_PASSWORD"]   = password
-
+ 
     print("\nAuthenticating...")
     try:
         client = NerisApiClient()
@@ -560,39 +654,39 @@ def main():
     except Exception as e:
         print(f"\n✗ Authentication failed: {e}")
         sys.exit(1)
-
+ 
     try:
         entity    = client.get_entity(entity_id)
         dept_name = entity.get("name", entity_id)
     except Exception:
         dept_name = entity_id
     print(f"\nDepartment: {dept_name} ({entity_id})")
-
+ 
     incidents = fetch_all_incidents(client, entity_id)
-
+ 
     if not incidents:
         print("\n⚠ No incidents found for this entity.")
         sys.exit(0)
-
+ 
     print("\nBuilding counts...")
     years, t0_counts, t1_counts, t2_counts, t3_counts = build_counts(incidents)
-
+ 
     if not years:
         print("⚠ No incidents with a valid call_create date found.")
         sys.exit(0)
-
+ 
     print(f"  Years found: {', '.join(str(y) for y in years)}")
-
+ 
     date_str      = datetime.now().strftime("%Y-%m-%d")
     safe_deptname = "".join(c if c.isalnum() or c in " -_" else "" for c in dept_name).strip()
     filename      = f"{safe_deptname} {date_str}.xlsx"
     write_report(years, t0_counts, t1_counts, t2_counts, t3_counts,
                  entity_id, dept_name, filename)
-
+ 
     print("\n" + "=" * 70)
     print("✓ PROCESS COMPLETE")
     print("=" * 70)
-
-
+ 
+ 
 if __name__ == "__main__":
     main()
