@@ -650,6 +650,7 @@ def export_to_excel(incidents, client, state_code):
         for _, row in df.iterrows():
             ws.append([sanitize(row[h]) for h in headers])
 
+
         fill  = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
         font  = Font(color="FFFFFF", bold=True, size=11)
         align = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -672,6 +673,11 @@ def export_to_excel(incidents, client, state_code):
     write_sheet(wb, df_raw,      "Raw Data")
     if not df_casualties.empty:
         write_sheet(wb, df_casualties, "Casualty & Rescue")
+
+    import pathlib
+    docs_dir = pathlib.Path.home() / "Documents"
+    docs_dir.mkdir(exist_ok=True)
+    filename = str(docs_dir / filename)
 
     wb.save(filename)
 
