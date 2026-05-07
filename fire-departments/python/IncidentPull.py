@@ -5,11 +5,6 @@ Fetches incidents for a fire department from the NERIS API and exports
 them to a formatted Excel file with Overview, Raw Data, and (if applicable)
 Casualty & Rescue sheets.
 
-Usage:
-    python neris_export.py
-
-Requirements (auto-installed if missing):
-    pip install pandas openpyxl neris-api-client
 """
 
 import sys
@@ -19,11 +14,6 @@ import copy
 import re
 import traceback
 from datetime import datetime, timedelta, timezone
-
-
-# ─────────────────────────────────────────────
-# 1. Install dependencies and NERIS API Client
-# ─────────────────────────────────────────────
 
 def ensure_dependencies():
     def pip_install(*packages):
@@ -47,11 +37,6 @@ def ensure_dependencies():
         print("Installing neris-api-client...")
         pip_install("neris-api-client")
         print("✓ neris-api-client installed")
-
-
-# ─────────────────────────────────────────────
-# 2. Define User Inputs
-# ─────────────────────────────────────────────
 
 DATE_RANGE_OPTIONS = [
     "All Records",
@@ -108,10 +93,6 @@ def prompt_config():
     return username, password, entity_id, range_type, start_date, end_date
 
 
-# ─────────────────────────────────────────────
-# 3. DATE RANGE CALCULATIONS
-# ─────────────────────────────────────────────
-
 def calculate_date_range(range_type, start_date=None, end_date=None):
     """Return (call_create_start, call_create_end) as UTC-aware datetimes.
 
@@ -150,11 +131,6 @@ def calculate_date_range(range_type, start_date=None, end_date=None):
 
     return None, None
 
-
-# ─────────────────────────────────────────────
-# 4. API AUTHENTICATION
-# ─────────────────────────────────────────────
-
 def authenticate(username, password):
     os.environ["NERIS_BASE_URL"]   = "https://api.neris.fsri.org/v1"
     os.environ["NERIS_GRANT_TYPE"] = "password"
@@ -176,10 +152,6 @@ def authenticate(username, password):
     print("\n✓ Authentication successful!")
     return client
 
-
-# ─────────────────────────────────────────────
-# 5. INCIDENT RETRIEVAL
-# ─────────────────────────────────────────────
 
 def get_department_incidents(client, neris_id_entity,
                               call_create_start=None, call_create_end=None,
@@ -237,11 +209,6 @@ def get_department_incidents(client, neris_id_entity,
     print(f"{'='*50}")
     return all_incidents
 
-
-# ─────────────────────────────────────────────
-# 6. EXCEL EXPORT
-# ─────────────────────────────────────────────
-
 def export_to_excel(incidents, client, department_id=None):
     import pandas as pd
     from openpyxl import Workbook
@@ -265,8 +232,6 @@ def export_to_excel(incidents, client, department_id=None):
             print(f"Department: {dept_name}")
         except Exception as e:
             print(f"  Could not fetch department name: {e}")
-
-    # ── Helpers ───────────────────────────────────────────────────────────────
 
     def extract_list_field(lst, key):
         if not lst or not isinstance(lst, list):
@@ -321,8 +286,6 @@ def export_to_excel(incidents, client, department_id=None):
     def sanitize(val):
         return ILLEGAL_CHARS_RE.sub("", val) if isinstance(val, str) else val
 
-    # ── Overview sheet ────────────────────────────────────────────────────────
-
     overview_rows = []
     for inc in incidents:
         base       = inc.get("base", {}) or {}
@@ -353,8 +316,6 @@ def export_to_excel(incidents, client, department_id=None):
             "Displacement Count":   base.get("displacement_count", ""),
             "Submitter Type":       inc.get("submitter_account_type", ""),
         })
-
-    # ── Raw Data + Casualty Detail ────────────────────────────────────────────
 
     casualty_detail_rows = []
     processed = []
@@ -422,7 +383,6 @@ def export_to_excel(incidents, client, department_id=None):
         # displacement_causes
         base["displacement_causes"] = join_list(base.get("displacement_causes", []))
 
-        # ── Location consolidation ─────────────────────────────────────────
         # Priority: base_geocoded → base → dispatch_geocoded → dispatch
         base_loc       = base.get("location", {}) or {}
         base_geo       = base_loc.get("geocoded_location", {}) or {}
@@ -455,7 +415,6 @@ def export_to_excel(incidents, client, department_id=None):
         # Remove original nested location objects to keep json_normalize clean
         base.pop("location", None)
         dispatch.pop("location", None)
-        # ── End location consolidation ─────────────────────────────────────
 
         # exposures
         exposures = inc.get("exposures", []) or []
@@ -586,7 +545,6 @@ def export_to_excel(incidents, client, department_id=None):
 
     df_raw = pd.json_normalize(processed, sep="_")
 
-    # ── Drop unwanted metadata columns ────────────────────────────────────────
     exclude_cols = {
         "actions_tactics_last_modified", "actions_tactics_neris_uid",
         "base_location_geocoded_location_neris_uid", "base_location_neris_uid",
@@ -640,7 +598,6 @@ def export_to_excel(incidents, client, department_id=None):
     }
     df_raw = df_raw.drop(columns=[c for c in exclude_cols if c in df_raw.columns])
 
-    # ── Column reordering ─────────────────────────────────────────────────────
     def reorder_columns(df):
         first_cols = [
             "department_neris_id",
@@ -687,7 +644,6 @@ def export_to_excel(incidents, client, department_id=None):
 
     df_raw = reorder_columns(df_raw)
 
-    # ── Drop blank columns ────────────────────────────────────────────────────
     def clean_df(df):
         drop = [
             col for col in df.columns
@@ -710,7 +666,6 @@ def export_to_excel(incidents, client, department_id=None):
     print(f"  Raw Data:          {len(df_raw.columns)} columns")
     print(f"  Casualty & Rescue: {len(df_casualties)} rows")
 
-    # ── Write Excel ───────────────────────────────────────────────────────────
     def write_sheet(wb, df, name):
         ws      = wb.create_sheet(name)
         headers = list(df.columns)
@@ -752,11 +707,6 @@ def export_to_excel(incidents, client, department_id=None):
     print(f"  Incidents : {len(incidents)}")
     print(f"  Sheets    : {sheets}")
     return filename
-
-
-# ─────────────────────────────────────────────
-# 7. MAIN
-# ─────────────────────────────────────────────
 
 def main():
     ensure_dependencies()
