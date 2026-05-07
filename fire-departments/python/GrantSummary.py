@@ -8,23 +8,12 @@ Excel report with four tables:
   - Incident Count by Discipline
   - Fire Sub-Category
   - Count of Incidents by Number of Incident Disciplines
-
-Usage:
-    python neris_grant_report.py
-
-Requirements (auto-installed if missing):
-    pip install python-dateutil openpyxl neris-api-client
 """
 
 import sys
 import subprocess
 import os
 from datetime import datetime
-
-
-# ─────────────────────────────────────────────
-# 1. DEPENDENCY INSTALLATION
-# ─────────────────────────────────────────────
 
 def ensure_dependencies():
     def pip_install(*packages):
@@ -48,11 +37,6 @@ def ensure_dependencies():
         print("Installing neris-api-client...")
         pip_install("neris-api-client")
         print("✓ neris-api-client installed")
-
-
-# ─────────────────────────────────────────────
-# 2. INCIDENT TYPE → CATEGORY MAPPING
-# ─────────────────────────────────────────────
 
 INCIDENT_TYPE_MAP = {
     # FIRE — Outside Fire
@@ -207,11 +191,6 @@ TABLE1_ROWS = ["FIRE", "EMS", "RESCUE", "HAZARDOUS SITUATION", "PUBLIC SERVICE",
 TABLE2_ROWS = ["STRUCTURE FIRE", "TRANSPORTATION FIRE", "VEGETATION FIRE",
                "TRASH / RUBBISH FIRE", "OUTDOOR FIRE", "SPECIAL FIRE"]
 
-
-# ─────────────────────────────────────────────
-# 3. USER INPUT
-# ─────────────────────────────────────────────
-
 def prompt_config():
     print("\n" + "=" * 60)
     print("  NERIS Grant Report — Incident Type Count by Year")
@@ -227,11 +206,6 @@ def prompt_config():
         sys.exit("✗ Email, password, and Entity ID are all required.")
 
     return username, password, entity_id
-
-
-# ─────────────────────────────────────────────
-# 4. AUTHENTICATION
-# ─────────────────────────────────────────────
 
 def authenticate(username, password):
     os.environ["NERIS_BASE_URL"]   = "https://api.neris.fsri.org/v1"
@@ -253,11 +227,6 @@ def authenticate(username, password):
 
     print("\n✓ Authentication successful!")
     return client
-
-
-# ─────────────────────────────────────────────
-# 5. INCIDENT RETRIEVAL
-# ─────────────────────────────────────────────
 
 def fetch_all_incidents(client, entity_id, page_size=100):
     all_incidents = []
@@ -293,11 +262,6 @@ def fetch_all_incidents(client, entity_id, page_size=100):
 
     print(f"\n✓ Total incidents fetched: {len(all_incidents)}")
     return all_incidents
-
-
-# ─────────────────────────────────────────────
-# 6. DATA PROCESSING
-# ─────────────────────────────────────────────
 
 def get_call_year(incident):
     """Extract the year from dispatch.call_create. Returns None if unavailable."""
@@ -404,11 +368,6 @@ def build_counts(incidents):
                 t3_counts[cat][year].get(total_type_count, 0) + 1
 
     return sorted(years), t0_counts, t1_counts, t2_counts, t3_counts
-
-
-# ─────────────────────────────────────────────
-# 7. EXCEL REPORT
-# ─────────────────────────────────────────────
 
 def write_report(years, t0_counts, t1_counts, t2_counts, t3_counts,
                  entity_id, dept_name, filename):
@@ -566,11 +525,6 @@ def write_report(years, t0_counts, t1_counts, t2_counts, t3_counts,
 
     wb.save(filename)
     print(f"\n✓ Report saved: {filename}")
-
-
-# ─────────────────────────────────────────────
-# 8. MAIN
-# ─────────────────────────────────────────────
 
 def main():
     ensure_dependencies()
