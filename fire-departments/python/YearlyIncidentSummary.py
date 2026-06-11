@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NERIS Grant Report — Incident Type Count by Year
+NERIS — Incident Type Count by Year
 -------------------------------------------------
 Fetches all incidents for a single department and produces a formatted
 Excel report with four tables:
