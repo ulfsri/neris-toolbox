@@ -11,7 +11,7 @@ import subprocess
 import os
 from datetime import datetime
 
-# Dependencies - This pip installs depend pacakges and the NERIS API client
+# Dependencies - This pip installs dependent pacakges and the NERIS API client
 def ensure_dependencies():
     def pip_install(*pkgs):
         subprocess.run(
@@ -330,7 +330,7 @@ def build_nfirs_counts(records):
 
     return sorted(years_set), C
 
-#  NERIS — API Fetch
+# NERIS — API Fetch
 # Notes: NERIS incidents can have up to 3 types, so we check all types for each incident and count it in a bucket if any type matches the criteria. 
 # There will be two total fields: One that sums all incidents, and one that sums only incidents that match a discipline (e.g. FIRE). Your discipline sum will likely exceed your total incident count because some incidents will have multiple disciplines. If an incident has multiple types of the same discipline, they are only counted once.  
 # This is not an official NFIRS:NERIS incident type mapping. Rather, these are NERIS types that seem to best match the intent of each NFIRS discipline category for the purpose of AFG grant reporting.
@@ -697,8 +697,7 @@ def write_sheet(ws, years, counts, sheet_label, entity_label, dept_name, report_
     for ci in range(2, num_cols + 1):
         ws.column_dimensions[get_column_letter(ci)].width = 14
 
-#  Prompt config - this is what the user fills in. Note that password is being passed as a string to avoid any issues across IDEs
-
+#  Prompt config - This is what the user fills in. Note that password is being passed as a string to avoid any issues across IDEs
 def prompt_config():
     print("\n" + "=" * 60)
     print("  Combined AFG Grant Report — NFIRS + NERIS")
