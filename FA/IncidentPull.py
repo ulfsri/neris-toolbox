@@ -56,7 +56,7 @@ def prompt_config():
     print("=" * 60)
 
     print("\n── Credentials ──────────────────────────────────")
-    entity_set_nuid = input("NERIS Entity Set NUID (UUID): ").strip()
+    entity_set_nuid = input("NERIS Entity Set ID: ").strip()
     username        = input("NERIS Email: ").strip()
     print("NERIS Password (note: characters will be visible):")
     password = input("> ").strip()
