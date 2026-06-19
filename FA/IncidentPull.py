@@ -1,3 +1,10 @@
+"""
+NERIS Incident Export Tool — Entity Set
+-----------------------------------------
+This script is for federal agencies to export incidents from all department in their entity set. 
+This script asks for your entity set NERIS ID, which is required for auth. 
+"""
+
 import sys
 import subprocess
 import os
@@ -6,6 +13,7 @@ import re
 import traceback
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 def ensure_dependencies():
     def pip_install(*packages):
@@ -29,6 +37,7 @@ def ensure_dependencies():
         pip_install("neris-api-client")
         print("✓ neris-api-client installed")
 
+
 DATE_RANGE_OPTIONS = [
     "All Records",
     "Occurred Today",
@@ -47,8 +56,8 @@ def prompt_config():
     print("=" * 60)
 
     print("\n── Credentials ──────────────────────────────────")
-    entity_set_id = input("NERIS Entity Set ID: ").strip()
-    username      = input("NERIS Email: ").strip()
+    entity_set_nuid = input("NERIS Entity Set NUID (UUID): ").strip()
+    username        = input("NERIS Email: ").strip()
     print("NERIS Password (note: characters will be visible):")
     password = input("> ").strip()
 
@@ -79,10 +88,11 @@ def prompt_config():
             except ValueError:
                 print("  Invalid format, use YYYY-MM-DD.")
 
-    if not entity_set_id or not username or not password:
-        sys.exit("✗ Entity Set ID, email, and password are all required.")
+    if not entity_set_nuid or not username or not password:
+        sys.exit("✗ Entity Set NUID, email, and password are all required.")
 
-    return entity_set_id, username, password, range_type, start_date, end_date
+    return entity_set_nuid, username, password, range_type, start_date, end_date
+
 
 def calculate_date_range(range_type, start_date=None, end_date=None):
     now   = datetime.now(tz=timezone.utc)
@@ -115,6 +125,7 @@ def calculate_date_range(range_type, start_date=None, end_date=None):
         return start_dt, end_dt
     return None, None
 
+
 BASE_URL = "https://api.neris.fsri.org/v1"
 
 
@@ -131,48 +142,46 @@ def authenticate(username, password):
     print("  CHECK YOUR EMAIL FOR THE MFA CODE")
     print("=" * 60)
     # Trigger MFA prompt
-    client.list_incidents(page_size=1)
+    client.health()
     print("✓ Authentication successful!")
     return client
 
 
-def get_entity_set_neris_ids(client, entity_set_id):
+def get_entity_set_neris_ids(client, entity_set_nuid):
     """
-    Hit GET /auth/user_role_entity_set_attachment/entity_set/{entity_set_id}
-    and collect every neris_id from entity_set.members across all results.
+    Hit GET /auth/entity_set/{nuid} directly — returns the entity set's
+    name, type, and member list without any per-sub attachment scoping.
     Returns (neris_ids: list[str], entity_set_name: str)
     """
-    url = f"{BASE_URL}/auth/user_role_entity_set_attachment/entity_set/{entity_set_id}"
-    print(f"\nFetching entity set members for: {entity_set_id}")
+    url = f"{BASE_URL}/auth/entity_set/{entity_set_nuid}"
+    print(f"\nFetching entity set: {entity_set_nuid}")
 
     try:
         res  = client._session.get(url)
         res.raise_for_status()
         data = res.json()
     except Exception as e:
-        sys.exit(f"\u2717 Could not fetch entity set: {e}")
+        sys.exit(f"✗ Could not fetch entity set: {e}")
 
-    if not isinstance(data, list) or not data:
-        sys.exit("\u2717 No entity set data returned for this ID.")
+    if not isinstance(data, dict):
+        sys.exit("✗ Unexpected response format for entity set.")
 
-    neris_ids       = []
-    entity_set_name = ""
-    seen            = set()
+    name    = data.get("name", "")
+    es_type = data.get("type", "")
+    members = data.get("members", [])
 
-    for attachment in data:
-        if not entity_set_name:
-            entity_set_name = (attachment.get("entity_set") or {}).get("name", "")
+    neris_ids = []
+    seen      = set()
+    for m in members:
+        nid = m.get("neris_id", "")
+        if nid and nid not in seen:
+            seen.add(nid)
+            neris_ids.append(nid)
 
-        members = (attachment.get("entity_set") or {}).get("members", [])
-        for m in members:
-            nid = m.get("neris_id", "")
-            if nid and nid not in seen:
-                seen.add(nid)
-                neris_ids.append(nid)
+    print(f"✓ Entity set: {name or entity_set_nuid} (type: {es_type or 'unknown'})")
+    print(f"✓ {len(neris_ids)} member NERIS IDs found")
+    return neris_ids, name or entity_set_nuid
 
-    print(f"\u2713 Entity set: {entity_set_name or entity_set_id}")
-    print(f"\u2713 {len(neris_ids)} NERIS IDs found")
-    return neris_ids, entity_set_name or entity_set_id
 
 def fetch_incidents_for_entity(client, neris_id,
                                call_create_start=None, call_create_end=None,
@@ -245,6 +254,7 @@ def get_all_incidents(client, neris_ids, call_create_start=None,
     print(f"{'='*50}")
     return all_incidents
 
+
 def export_to_excel(incidents, client, label):
     import pandas as pd
     from openpyxl import Workbook
@@ -256,11 +266,10 @@ def export_to_excel(incidents, client, label):
         print("⚠ No incidents to export.")
         return None
 
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str   = datetime.now().strftime("%Y-%m-%d")
     safe_label = "".join(c if c.isalnum() or c in " -_" else "" for c in label).strip()
-    filename = f"NERIS Incidents {safe_label} {date_str}.xlsx"
+    filename   = f"NERIS Incidents {safe_label} {date_str}.xlsx"
 
-    # Department name cache
     dept_ids = {
         (inc.get("base") or {}).get("department_neris_id")
         for inc in incidents
@@ -277,8 +286,6 @@ def export_to_excel(incidents, client, label):
         if i % 25 == 0:
             print(f"  {i}/{len(dept_ids)} departments looked up...")
     print("✓ Department lookup complete")
-
-    # ── Helpers ───────────────────────────────────────────────────────────────
 
     def extract_list_field(lst, key):
         if not lst or not isinstance(lst, list):
@@ -331,8 +338,6 @@ def export_to_excel(incidents, client, label):
     def sanitize(val):
         return ILLEGAL_CHARS_RE.sub("", val) if isinstance(val, str) else val
 
-    # ── Overview ──────────────────────────────────────────────────────────────
-
     overview_rows = []
     for inc in incidents:
         base       = inc.get("base", {}) or {}
@@ -363,8 +368,6 @@ def export_to_excel(incidents, client, label):
             "Displacement Count":   base.get("displacement_count", ""),
             "Submitter Type":       inc.get("submitter_account_type", ""),
         })
-
-    # ── Raw Data + Casualties ─────────────────────────────────────────────────
 
     casualty_detail_rows = []
     processed = []
@@ -420,7 +423,6 @@ def export_to_excel(incidents, client, label):
 
         base["displacement_causes"] = join_list(base.get("displacement_causes", []))
 
-        # Location consolidation
         base_loc       = base.get("location", {}) or {}
         base_geo       = base_loc.get("geocoded_location", {}) or {}
         base_geo_point = base_geo.get("point", {}) if base_geo else {}
@@ -686,16 +688,28 @@ def export_to_excel(incidents, client, label):
     print(f"  Sheets    : {sheets}")
     return filepath
 
+
 def main():
     ensure_dependencies()
 
-    entity_set_id, username, password, range_type, start_date, end_date = prompt_config()
+    entity_set_nuid, username, password, range_type, start_date, end_date = prompt_config()
 
     client = authenticate(username, password)
 
-    neris_ids, entity_set_name = get_entity_set_neris_ids(client, entity_set_id)
+    neris_ids, entity_set_name = get_entity_set_neris_ids(client, entity_set_nuid)
     if not neris_ids:
-        sys.exit("✗ No entity IDs found in entity set — nothing to fetch.")
+        sys.exit("✗ No member entity IDs found in entity set — nothing to fetch.")
+
+    # Only fire department entities (FD prefix) support the /incident
+    # endpoint's neris_id_entity filter. Any other entity type is skipped.
+    dept_ids = [nid for nid in neris_ids if nid.startswith("FD")]
+    skipped  = [nid for nid in neris_ids if not nid.startswith("FD")]
+    if skipped:
+        print(f"\n⚠ Skipping {len(skipped)} non-department entity ID(s): "
+              f"{', '.join(skipped)}")
+    neris_ids = dept_ids
+    if not neris_ids:
+        sys.exit("✗ No fire department (FD) entities found in this entity set.")
 
     call_create_start, call_create_end = calculate_date_range(range_type, start_date, end_date)
 
