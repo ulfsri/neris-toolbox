@@ -14,20 +14,13 @@ import sys
 import time
 from datetime import datetime
  
-# Two-letter state abbreviation to export (e.g. "IL", "TX", "CA")
 STATE = "XX"
  
-# Output file path. The {state} and {timestamp} placeholders will be filled in
-# automatically. Set to an absolute path if you want the file elsewhere, e.g.:
-#   EXPORT_PATH = "C:/Users/you/Documents/neris_export_{state}_{timestamp}.csv"
 EXPORT_PATH = "neris_apparatus_{state}_{timestamp}.csv"
- 
-# Credentials -- leave as "" to be prompted at runtime instead.
-# WARNING: if you store credentials here, do not share this file publicly.
+
 USERNAME = ""
 PASSWORD = ""
  
-# No changes needed below this line #
  
 OUTPUT_FILE = EXPORT_PATH.format(
     state=STATE.upper(),
