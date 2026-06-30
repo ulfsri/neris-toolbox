@@ -131,6 +131,7 @@ NFIRS_FEATURE_SERVICES = [
     {"year": 2022, "url": "https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/NFIRS_PDR_Light_Service_2022/FeatureServer/0"},
     {"year": 2023, "url": "https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/NFIRS_PDR_Light_Service_2023/FeatureServer/0"},
     {"year": 2024, "url": "https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/NFIRS_PDR_Light_Service_2024/FeatureServer/0"},
+    {"year": 2025, "url": "https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/NFIRS_PDR_Light_Service_2025/FeatureServer/0"},
 ]
 
 NFIRS_FIELDS = [
@@ -210,6 +211,8 @@ def _inc(d, year, val=1):
 def _nfirs_is_fire(inc_type):
     return inc_type.startswith("1")
 
+def _nfirs_is_struct_fire(inc_type):
+    return inc_type in STRUCT_CODES
 
 def _nfirs_act_has(rec, code):
     """Check if any of ACT_TAK1/2/3 equals the given code string."""
@@ -303,7 +306,7 @@ def build_nfirs_counts(records):
             _inc(C["aid_given_auto"], year)
         if aid in ("3", "4"):
             _inc(C["aid_given"], year)
-        if aid in ("1", "2", "3", "4") and _nfirs_is_fire(it):
+        if aid in ("1", "2", "5") and _nfirs_is_struct_fire(it):
             _inc(C["aid_fire"], year)
 
         # EMS
@@ -370,6 +373,8 @@ NERIS_FALSE_ALARM_TYPES = {
     "NOEMERG||FALSE_ALARM||MALFUNCTIONING_ALARM",
     "NOEMERG||FALSE_ALARM||OTHER_FALSE_CALL",
 }
+NERIS_CANCELLED_TYPE = "NOEMERG||CANCELLED"
+
 NERIS_WEATHER_PREFIX = "PUBSERV||DISASTER_WEATHER"
 
 # Fire detail prefixes
@@ -488,7 +493,20 @@ def build_neris_counts(incidents):
         types   = _neris_types(inc)
         actions = _neris_actions(inc)
 
-        is_fire = _neris_any_type_match(types, lambda t: t.startswith(NERIS_FIRE_PREFIX))
+      # This removes any multi-type call from the series-based counts where any other type was CANCELLED
+      # This prevents calls from being counted in the series if they were also marked as a cancelled call
+      # Cancelled calls are still included in the TOTAL INCIDENTS, but the disciplines are not divided out for those calls
+        is_fire      = _neris_any_type_match(types, lambda t: t.startswith(NERIS_FIRE_PREFIX))
+        is_cancelled = NERIS_CANCELLED_TYPE in types
+
+        # Total and false alarm are the only buckets a cancelled incident can land in.
+        _inc(C["total"], year)
+
+        if _neris_any_type_match(types, lambda t: t in NERIS_FALSE_ALARM_TYPES):
+            _inc(C["s_false_alarm"], year)
+
+        if is_cancelled:
+            continue
 
         # Total
         _inc(C["total"], year)
@@ -534,9 +552,6 @@ def build_neris_counts(incidents):
 
         if _neris_any_type_match(types, lambda t: t.startswith(NERIS_GOOD_INTENT_PREFIX)):
             _inc(C["s_good_intent"], year)
-
-        if _neris_any_type_match(types, lambda t: t in NERIS_FALSE_ALARM_TYPES):
-            _inc(C["s_false_alarm"], year)
 
         if _neris_any_type_match(types, lambda t: t.startswith(NERIS_WEATHER_PREFIX)):
             _inc(C["s_weather"], year)
@@ -712,7 +727,7 @@ def prompt_config():
     print("\n── NFIRS ArcGIS Filters ──")
     state = input("  State abbreviation (e.g. VA): ").strip().upper()
     fdid  = input("  FDID: ").strip()
-    nfirs_years = [2022, 2023, 2024]
+    nfirs_years = [2022, 2023, 2024,2025]
 
     if not all([neris_user, neris_pass, entity_id, state, fdid]):
         sys.exit("✗ All fields are required.")
