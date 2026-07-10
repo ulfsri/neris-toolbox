@@ -403,6 +403,16 @@ def export_to_excel(incidents, client, state_code):
         base.pop("location", None)
         dispatch.pop("location", None)
 
+        parcel = inc.get('parcel', {}) or {}
+        parcel_assessment = (parcel.get('summary', {}) or {}).get('assessment', {}) or {}
+        inc['parcel_primary_year_built'] = parcel_assessment.get('primary_year_built', '')
+        inc['parcel_primary_zoning'] = parcel_assessment.get('primary_zoning', '')
+        inc['parcel_primary_use'] = parcel_assessment.get('primary_use', '')
+        inc['parcel_primary_owner_occupied'] = parcel_assessment.get('primary_owner_occupied', '')
+        inc['parcel_primary_assessment_land'] = parcel_assessment.get('primary_assessment_land', '')
+        inc['parcel_computed_loss'] = parcel_assessment.get('computed_loss', '')
+        inc.pop('parcel', None)
+        
         exposures = inc.get("exposures", []) or []
         inc["exposure_count"]        = len(exposures)
         inc["exposure_damage_types"] = extract_list_field(exposures, "damage_type")
