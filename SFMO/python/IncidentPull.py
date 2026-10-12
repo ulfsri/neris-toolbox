@@ -1439,42 +1439,101 @@ def export_to_excel(incidents, client, filename=None, state_code=None):
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
 
+   from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+ 
+    from openpyxl.cell import WriteOnlyCell
+    try:
+        from openpyxl.cell.cell import KNOWN_TYPES as _XL_TYPES
+    except ImportError:  # very old openpyxl
+        _XL_TYPES = (str, int, float, bool, datetime, type(None))
+ 
+    import re
+    ILLEGAL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+    EXCEL_CELL_MAX = 32767  # Excel's per-cell character limit
+ 
+    def sanitize(val):
+        """Make any value safe to put in an Excel cell.
+ 
+        Some NERIS fields are still lists or dicts after the flattening
+        above (e.g. an empty [] array on a field that isn't specifically
+        handled), and openpyxl refuses those outright ("Cannot convert []
+        to Excel"), which killed a 96k-incident export at the very end.
+        Lists of plain values are joined with '||' (same convention as the
+        rest of this export); anything nested is written as JSON text.
+        """
+        if isinstance(val, (list, tuple, set)):
+            if not val:
+                return None
+            if all(not isinstance(x, (dict, list, tuple, set)) for x in val):
+                val = '||'.join(str(x) for x in val)
+            else:
+                val = json.dumps(list(val), default=str)
+        elif isinstance(val, dict):
+            if not val:
+                return None
+            val = json.dumps(val, default=str)
+        elif isinstance(val, datetime) and val.tzinfo is not None:
+            # Excel has no time zones; keep the UTC wall-clock time.
+            val = val.astimezone(timezone.utc).replace(tzinfo=None)
+        try:
+            if pd.isna(val):
+                return None
+        except (TypeError, ValueError):
+            pass
+        if isinstance(val, str):
+            val = ILLEGAL_CHARS_RE.sub('', val)
+            if len(val) > EXCEL_CELL_MAX:
+                suffix = ' ...[truncated]'
+                val = val[:EXCEL_CELL_MAX - len(suffix)] + suffix
+        elif not isinstance(val, _XL_TYPES):
+            val = str(val)
+        return val
+ 
+    header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
+    header_font = Font(color='FFFFFF', bold=True, size=11)
+    header_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
+ 
     def write_formatted_sheet(wb, df, sheet_name):
-        import re
-        ILLEGAL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
-        def sanitize(val):
-            if isinstance(val, str):
-                return ILLEGAL_CHARS_RE.sub('', val)
-            return val
-
+        """Stream one DataFrame into a sheet of a write-only workbook.
+ 
+        Write-only mode streams rows to disk instead of holding every cell
+        in memory: a statewide export (~96k incidents x ~170 columns, about
+        16 million cells) needs roughly 6 GB in openpyxl's normal mode but
+        well under 100 MB this way. Write-only sheets must have their
+        column widths and frozen header set BEFORE any row is written, so
+        widths are sized from the first 50 data rows up front.
+        """
         sheet = wb.create_sheet(sheet_name)
         headers = list(df.columns)
-        sheet.append(headers)
-        for _, row_data in df.iterrows():
-            sheet.append([sanitize(row_data[h]) for h in headers])
-
-        header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
-        header_font = Font(color='FFFFFF', bold=True, size=11)
-        header_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
-
-        for cell in sheet[1]:
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = header_align
-
-        for col_idx, header in enumerate(headers, 1):
-            col_letter = get_column_letter(col_idx)
-            max_len = len(str(header))
-            for row in range(2, min(sheet.max_row + 1, 52)):
-                val = sheet.cell(row, col_idx).value
-                if val:
-                    max_len = max(max_len, len(str(val)))
-            sheet.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 60)
-
+ 
+        sample = df.head(50).itertuples(index=False, name=None)
+        widths = [len(str(h)) for h in headers]
+        for row in sample:
+            for i, v in enumerate(row):
+                v = sanitize(v)
+                if v:
+                    widths[i] = max(widths[i], len(str(v)))
+        for col_idx, w in enumerate(widths, 1):
+            sheet.column_dimensions[get_column_letter(col_idx)].width = min(max(w + 2, 12), 60)
         sheet.freeze_panes = 'A2'
-
-    wb = Workbook()
-    wb.remove(wb.active)
+ 
+        header_row = []
+        for h in headers:
+            c = WriteOnlyCell(sheet, value=sanitize(h))
+            c.fill = header_fill
+            c.font = header_font
+            c.alignment = header_align
+            header_row.append(c)
+        sheet.append(header_row)
+ 
+        for i, row in enumerate(df.itertuples(index=False, name=None), 1):
+            sheet.append([sanitize(v) for v in row])
+            if i % 20000 == 0:
+                print(f"    {sheet_name}: {i:,}/{len(df):,} rows written...")
+ 
+    wb = Workbook(write_only=True)
     write_formatted_sheet(wb, df_overview, 'Overview')
     write_formatted_sheet(wb, df_raw, 'Raw Data')
     if not df_casualties.empty:
