@@ -3,9 +3,16 @@ NERIS Incident Export Tool — States .py
 ------------------------------------
 Fetches incidents for all departments in a state from the NERIS API and
 exports them to a formatted Excel file with Overview, Raw Data, and (if
-applicable) Casualty & Rescue sheets. 
+applicable) Casualty & Rescue sheets.
 
-Note that if a column has no data throughout the entire dataset, it will be dropped from the Excel file output. 
+Note that if a column has no data throughout the entire dataset, it will be dropped from the Excel file output.
+
+RUNNING IN VS CODE: the script pauses for you to type your NERIS email,
+password and the emailed MFA code, so it must run in the TERMINAL panel:
+  - Use "Run Python File in Terminal" (the play button's default), or
+  - When debugging (F5), make sure launch.json has "console": "integratedTerminal".
+The Code Runner extension's OUTPUT tab and the DEBUG CONSOLE can't accept
+typed input, so the script can't pause for the code there.
 """
 
 import sys
@@ -20,7 +27,7 @@ from datetime import datetime, timezone, timedelta
 from urllib.parse import urlsplit, parse_qs
 from collections import deque
 
-pd = None 
+pd = None
 
 
 def ensure_dependencies():
@@ -31,9 +38,9 @@ def ensure_dependencies():
         )
 
     try:
-        import pandas   
+        import pandas
         import openpyxl
-        import requests 
+        import requests
     except ImportError:
         print("Installing pandas, openpyxl, and requests...")
         pip_install("pandas", "openpyxl", "requests")
@@ -237,6 +244,16 @@ DATE_RANGE_OPTIONS = [
 ]
 
 
+_NO_INPUT_MESSAGE = (
+    "\n✗ This program can't read what you type, so it can't pause for your "
+    "login details or MFA code.\n"
+    "  In VS Code, run it in the TERMINAL panel instead:\n"
+    "    • Use 'Run Python File in Terminal' (not Code Runner's OUTPUT tab), or\n"
+    "    • When debugging (F5), set \"console\": \"integratedTerminal\" in launch.json\n"
+    "      (not \"internalConsole\", which is the Debug Console)."
+)
+
+
 def _parse_incident_type_selection(raw):
     cats  = list(INCIDENT_TYPE_MAP.keys())
     valid = {t for types in INCIDENT_TYPE_MAP.values() for t in types}
@@ -317,39 +334,45 @@ def prompt_config():
     }
 
 _auth_lock = threading.Lock()
-_orig_call = None  
+_orig_call = None
 _last_reauth_at = {"t": 0.0}
 
 _mfa_wait_state = {"waiting": False, "since": 0.0}
 
-_MFA_INPUT_TIMEOUT_SECONDS = 600
+# How many times a typed MFA code may be rejected before giving up on this
+# sign-in attempt (each rejection automatically emails a fresh code).
+_MFA_MAX_REJECTED_CODES = 3
 
 
-def _input_with_timeout(prompt, timeout_seconds):
-    """Like input(), but gives up after timeout_seconds instead of blocking
-    forever. Implemented with a daemon thread + queue since input() itself
-    has no cross-platform timeout. If nothing is typed in time, raises
-    TimeoutError and the background thread is simply abandoned -- if a code
-    is typed into it after the fact, it's read by that orphaned thread and
-    discarded, never consumed by the next prompt, which is a fine trade for
-    not hanging indefinitely."""
-    import queue
-    q = queue.Queue(maxsize=1)
+def _prompt_mfa_code(challenge_name):
+    """Pause the script until the user types the emailed MFA code.
 
-    def _reader():
-        try:
-            q.put(input(prompt))
-        except Exception:
-            pass  
-
-    threading.Thread(target=_reader, daemon=True).start()
+    input() is called directly on the calling thread (not in a background
+    thread), so it truly blocks and works in VS Code's integrated terminal,
+    a normal terminal, and the Jupyter/Interactive window alike. There is
+    deliberately no timeout: the run can't continue without a code anyway,
+    and a background reader thread would swallow the next thing typed. If a
+    code expires while you're away, just press Enter on a blank line and a
+    fresh one is emailed.
+    """
+    print("\a", end="")  # terminal bell, to get attention if you've tabbed away
+    print("\n" + "=" * 60)
+    print("  ⏸  PAUSED — CHECK YOUR EMAIL FOR THE NERIS MFA CODE")
+    print("  Type the code below and press Enter to continue.")
+    print("  (Press Enter on a blank line to have a NEW code emailed.)")
+    print("=" * 60, flush=True)
+    _mfa_wait_state["waiting"] = True
+    _mfa_wait_state["since"] = time.monotonic()
     try:
-        return q.get(timeout=timeout_seconds)
-    except queue.Empty:
-        raise TimeoutError(
-            f"No MFA code entered within {timeout_seconds}s — requesting "
-            f"a fresh code instead of waiting indefinitely"
-        )
+        return input(f"MFA code ({challenge_name}): ").strip()
+    except EOFError:
+        # SystemExit is not caught by the retry loops' `except Exception`,
+        # so this stops cleanly instead of emailing code after code.
+        sys.exit(_NO_INPUT_MESSAGE)
+    finally:
+        _mfa_wait_state["waiting"] = False
+        # Don't let the stall watcher count the time spent typing as "stuck".
+        _last_activity_at["t"] = time.monotonic()
 
 
 def _maybe_force_reauth(client_self, token_before, context_label):
@@ -392,11 +415,11 @@ def _maybe_force_reauth(client_self, token_before, context_label):
     return False
 
 _RATE_LIMITS = [
-    (20, 5.0),        
+    (20, 5.0),
 ]
 
 _rate_lock = threading.Lock()
-_request_times = [deque() for _ in _RATE_LIMITS]  
+_request_times = [deque() for _ in _RATE_LIMITS]
 
 
 def _looks_like_rate_limit(resp):
@@ -459,20 +482,15 @@ def _init_request_log(state_code):
 def _watch_for_stalls(stop_event, get_progress):
     """Runs in a daemon thread for the duration of the fetch phase. Every
     30s, checks how long it's been since the LAST HTTP response of any
-    kind. Distinguishes "waiting on a human for an MFA code" (via
-    _mfa_wait_state) from a genuine idle stretch, and a short idle stretch
-    (normal retry/backoff) from one that looks genuinely stuck."""
+    kind. Stays silent while an MFA prompt is waiting (so it never prints
+    over the line you're typing the code into), and distinguishes a short
+    idle stretch (normal retry/backoff) from one that looks genuinely stuck."""
     while not stop_event.wait(30):
+        if _mfa_wait_state["waiting"]:
+            continue
+
         idle = time.monotonic() - _last_activity_at["t"]
         progress_desc = get_progress()
-
-        if _mfa_wait_state["waiting"]:
-            waited = time.monotonic() - _mfa_wait_state["since"]
-            print(f"  ⏳ Waiting on YOU — an MFA code prompt is live above "
-                  f"(asked {waited:.0f}s ago, times out and retries "
-                  f"automatically at {_MFA_INPUT_TIMEOUT_SECONDS}s). Check "
-                  f"your email and type the code into the terminal.")
-            continue
 
         if idle < 90:
             continue
@@ -527,7 +545,7 @@ def _install_thread_safety_patch():
 
     def _safe_update_auth(self):
         if self.tokens.expires_at > datetime.now() + timedelta(seconds=120):
-            return 
+            return
 
         token_url = f"{self.config.base_url}/token"
 
@@ -553,6 +571,7 @@ def _install_thread_safety_patch():
         have_refresh = bool(self.tokens.refresh_token)
         res = _refresh_grant() if have_refresh else _password_grant()
         allow_fallback_to_password = have_refresh
+        rejected_codes = 0
 
         while True:
             try:
@@ -567,35 +586,41 @@ def _install_thread_safety_patch():
                     expires_at=datetime.now() + timedelta(seconds=got["expires_in"]),
                 )
                 _last_reauth_at["t"] = time.monotonic()
+                print("  ✓ Signed in to NERIS", flush=True)
                 return
 
             if res.status_code == 202:
-                print("\n" + "=" * 60)
-                print("  CHECK YOUR EMAIL FOR THE MFA CODE")
-                print("  (mid-run re-authentication needs a code entered here —")
-                print(f"   waits up to {_MFA_INPUT_TIMEOUT_SECONDS}s, then requests a fresh "
-                      f"code automatically)")
-                print("=" * 60)
-                _mfa_wait_state["waiting"] = True
-                _mfa_wait_state["since"] = time.monotonic()
-                try:
-                    code = _input_with_timeout(
-                        f"Provide MFA code for {got.get('challenge_name', 'MFA')}: ",
-                        _MFA_INPUT_TIMEOUT_SECONDS,
-                    )
-                finally:
-                    _mfa_wait_state["waiting"] = False
+                challenge = got.get("challenge_name", "MFA")
+                code = _prompt_mfa_code(challenge)
+
+                if not code:
+                    print("  Requesting a new MFA code — check your email again...")
+                    res = _password_grant()
+                    continue
+
                 res = self._session.post(
                     token_url,
                     headers={"Content-Type": "application/x-www-form-urlencoded"},
                     data={
-                        "grant_type": got["challenge_name"],
+                        "grant_type": challenge,
                         "username": self.config.username,
                         "session": got["session"],
-                        got["challenge_name"]: code,
+                        challenge: code,
                     },
                     timeout=30,
                 )
+
+                if res.status_code not in (200, 202):
+                    rejected_codes += 1
+                    if rejected_codes < _MFA_MAX_REJECTED_CODES:
+                        print(f"  ✗ That code wasn't accepted (HTTP {res.status_code}). "
+                              f"A new code is being emailed — please try again.")
+                        res = _password_grant()
+                        continue
+                    raise RuntimeError(
+                        f"MFA code rejected {rejected_codes} times "
+                        f"(last: HTTP {res.status_code} - {res.text[:300]!r})"
+                    )
                 continue
 
             if allow_fallback_to_password:
@@ -682,7 +707,7 @@ def _install_thread_safety_patch():
                 return res
 
             if attempt == max_attempts:
-                return res  
+                return res
 
             print(f"  ⚠ Token rejected (HTTP {res.status_code}) on "
                   f"{args[:2] if args else kwargs.get('path', '?')} "
@@ -691,7 +716,7 @@ def _install_thread_safety_patch():
             with _auth_lock:
                 need_cooldown = _maybe_force_reauth(self, token_before, f"api/{args[:2] if args else kwargs.get('path', '?')}")
             if need_cooldown:
-                time.sleep(1.5) 
+                time.sleep(1.5)
         return res
 
     _NerisApiClient._call = _locked_call
@@ -771,16 +796,14 @@ def authenticate(username, password):
     _install_thread_safety_patch()
 
     print("\nConnecting to NERIS API...")
+    print("(NERIS will email you an MFA code — the script will pause and ask for it.)",
+          flush=True)
     client = NerisApiClient(Config(
         base_url="https://api.neris.fsri.org/v1",
         grant_type="password",
         username=username,
         password=password,
     ))
-
-    print("\n" + "=" * 60)
-    print("  CHECK YOUR EMAIL FOR THE MFA CODE")
-    print("=" * 60)
 
     last_error = None
     for attempt in range(1, 4):
@@ -854,11 +877,11 @@ def get_state_incidents(client, state_code, call_create_start=None, call_create_
 
     Every page goes through the patched, lock-protected client._call()
     (auth check, proactive refresh, forced re-auth on a 401/403), and is
-    additionally retried up to 3 times on any other error (e.g. an MFA code
-    prompt that timed out, or a 5xx) before giving up. If a page still
-    fails, whatever was retrieved so far is returned and
-    _fetch_status["incomplete"] is set, so the run reports PARTIAL results
-    loudly instead of silently treating them as the complete set.
+    additionally retried up to 3 times on any other error (e.g. a 5xx)
+    before giving up. If a page still fails, whatever was retrieved so far
+    is returned and _fetch_status["incomplete"] is set, so the run reports
+    PARTIAL results loudly instead of silently treating them as the
+    complete set.
     """
     all_incidents = []
     next_cursor = None
@@ -1438,24 +1461,19 @@ def export_to_excel(incidents, client, filename=None, state_code=None):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.utils import get_column_letter
-
-   from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment
-    from openpyxl.utils import get_column_letter
- 
     from openpyxl.cell import WriteOnlyCell
     try:
         from openpyxl.cell.cell import KNOWN_TYPES as _XL_TYPES
     except ImportError:  # very old openpyxl
         _XL_TYPES = (str, int, float, bool, datetime, type(None))
- 
+
     import re
     ILLEGAL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
     EXCEL_CELL_MAX = 32767  # Excel's per-cell character limit
- 
+
     def sanitize(val):
         """Make any value safe to put in an Excel cell.
- 
+
         Some NERIS fields are still lists or dicts after the flattening
         above (e.g. an empty [] array on a field that isn't specifically
         handled), and openpyxl refuses those outright ("Cannot convert []
@@ -1490,14 +1508,14 @@ def export_to_excel(incidents, client, filename=None, state_code=None):
         elif not isinstance(val, _XL_TYPES):
             val = str(val)
         return val
- 
+
     header_fill = PatternFill(start_color='1F4E78', end_color='1F4E78', fill_type='solid')
     header_font = Font(color='FFFFFF', bold=True, size=11)
     header_align = Alignment(horizontal='center', vertical='center', wrap_text=True)
- 
+
     def write_formatted_sheet(wb, df, sheet_name):
         """Stream one DataFrame into a sheet of a write-only workbook.
- 
+
         Write-only mode streams rows to disk instead of holding every cell
         in memory: a statewide export (~96k incidents x ~170 columns, about
         16 million cells) needs roughly 6 GB in openpyxl's normal mode but
@@ -1507,7 +1525,7 @@ def export_to_excel(incidents, client, filename=None, state_code=None):
         """
         sheet = wb.create_sheet(sheet_name)
         headers = list(df.columns)
- 
+
         sample = df.head(50).itertuples(index=False, name=None)
         widths = [len(str(h)) for h in headers]
         for row in sample:
@@ -1518,7 +1536,7 @@ def export_to_excel(incidents, client, filename=None, state_code=None):
         for col_idx, w in enumerate(widths, 1):
             sheet.column_dimensions[get_column_letter(col_idx)].width = min(max(w + 2, 12), 60)
         sheet.freeze_panes = 'A2'
- 
+
         header_row = []
         for h in headers:
             c = WriteOnlyCell(sheet, value=sanitize(h))
@@ -1527,12 +1545,12 @@ def export_to_excel(incidents, client, filename=None, state_code=None):
             c.alignment = header_align
             header_row.append(c)
         sheet.append(header_row)
- 
+
         for i, row in enumerate(df.itertuples(index=False, name=None), 1):
             sheet.append([sanitize(v) for v in row])
             if i % 20000 == 0:
                 print(f"    {sheet_name}: {i:,}/{len(df):,} rows written...")
- 
+
     wb = Workbook(write_only=True)
     write_formatted_sheet(wb, df_overview, 'Overview')
     write_formatted_sheet(wb, df_raw, 'Raw Data')
@@ -1548,10 +1566,21 @@ def export_to_excel(incidents, client, filename=None, state_code=None):
 
 def main():
     global pd
+
+    # Show every printed line immediately (VS Code's panels can otherwise
+    # hold output back, so the "check your email" banner appears late).
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
     ensure_dependencies()
     import pandas as pd
 
-    cfg = prompt_config()
+    try:
+        cfg = prompt_config()
+    except EOFError:
+        sys.exit(_NO_INPUT_MESSAGE)
     state_code = cfg["state_code"]
 
     log_path = _init_request_log(state_code)
