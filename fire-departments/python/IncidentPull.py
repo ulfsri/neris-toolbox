@@ -13,6 +13,8 @@ import os
 import copy
 import re
 import traceback
+import json
+import math
 from datetime import datetime, timedelta, timezone
 
 def ensure_dependencies():
@@ -282,9 +284,31 @@ def export_to_excel(incidents, client, department_id=None):
         }
 
     ILLEGAL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+    EXCEL_CELL_LIMIT = 32767
 
     def sanitize(val):
-        return ILLEGAL_CHARS_RE.sub("", val) if isinstance(val, str) else val
+            # Lists / tuples: empty -> blank, simple values -> "a||b", nested -> JSON
+            if isinstance(val, (list, tuple)):
+                if not val:
+                    return ""
+                if all(not isinstance(x, (dict, list, tuple)) for x in val):
+                    val = "||".join(str(x) for x in val if x not in (None, ""))
+                else:
+                    val = json.dumps(val, default=str)
+            # Dicts: empty -> blank, otherwise JSON
+            elif isinstance(val, dict):
+                if not val:
+                    return ""
+                val = json.dumps(val, default=str)
+            # NaN / None -> blank
+            elif val is None or (isinstance(val, float) and math.isnan(val)):
+                return ""
+
+            if isinstance(val, str):
+                val = ILLEGAL_CHARS_RE.sub("", val)
+                if len(val) > EXCEL_CELL_LIMIT:
+                    val = val[:EXCEL_CELL_LIMIT - 3] + "..."
+            return val
 
     overview_rows = []
     for inc in incidents:
